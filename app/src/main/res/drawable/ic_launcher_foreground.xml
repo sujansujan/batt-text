@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Pure geometric ASCII/box-drawing battery gauge: [ ███░ ] -->
+    <!-- Left bracket [ in Dracula Foreground (#F8F8F2) -->
+    <path
+        android:fillColor="#F8F8F2"
+        android:pathData="M24,36h9v4.5h-4.5v27h4.5v4.5h-9z" />
+    <!-- Right bracket ] in Dracula Foreground (#F8F8F2) -->
+    <path
+        android:fillColor="#F8F8F2"
+        android:pathData="M75,36h9v36h-9v-4.5h4.5v-27h-4.5z" />
+    <!-- Terminal positive cap  anode nub on right in Dracula Comment (#6272A4) -->
+    <path
+        android:fillColor="#6272A4"
+        android:pathData="M84,48h3.5v12h-3.5z" />
+    <!-- 3 solid block characters ███ in Dracula Green (#50FA7B) -->
+    <path
+        android:fillColor="#50FA7B"
+        android:pathData="M36,41h8v26h-8zM46.5,41h8v26h-8zM57,41h8v26h-8z" />
+    <!-- 1 empty/shaded block character ░ in Dracula Comment (#6272A4) -->
+    <path
+        android:fillColor="#6272A4"
+        android:pathData="M67.5,41h4.5v26h-4.5z" />
+</vector>

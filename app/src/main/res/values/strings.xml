@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">BattText</string>
+    <string name="channel_monitor_name">Live Battery Telemetry</string>
+    <string name="channel_monitor_desc">Low-importance silent persistent notification showing live battery stats</string>
+    <string name="channel_alerts_name">Battery Threshold Alerts</string>
+    <string name="channel_alerts_desc">Alerts for charge limit, low/critical battery, and high temperature</string>
+    <string name="action_dismiss">DISMISS</string>
+</resources>
