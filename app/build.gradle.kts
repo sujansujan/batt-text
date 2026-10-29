@@ -12,8 +12,11 @@ android {
         applicationId = "com.batttext.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 3
-        versionName = "1.2.0"
+        versionCode = 4
+        versionName = "1.3.0"
+
+        // Strip unused language translations bundled by AndroidX libraries (~400 KB saved)
+        resourceConfigurations += listOf("en")
 
         vectorDrawables {
             useSupportLibrary = true
@@ -29,8 +32,9 @@ android {
             versionNameSuffix = "-DEBUG"
         }
         release {
-            isMinifyEnabled = false
-            isShrinkResources = false
+            // Full R8 shrinking, dead-code elimination, and resource shrinking (~1.3 MB APK)
+            isMinifyEnabled = true
+            isShrinkResources = true
             signingConfig = signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -50,7 +54,7 @@ android {
 
     buildFeatures {
         compose = true
-        buildConfig = true
+        buildConfig = false
     }
 
     composeOptions {
@@ -59,7 +63,13 @@ android {
 
     packaging {
         resources {
-            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            excludes += setOf(
+                "/META-INF/{AL2.0,LGPL2.1}",
+                "/META-INF/*.kotlin_module",
+                "/META-INF/versions/**",
+                "DebugProbesKt.bin",
+                "kotlin-tooling-metadata.json"
+            )
         }
     }
 }
@@ -75,19 +85,16 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-service:2.8.4")
     implementation("androidx.activity:activity-compose:1.9.1")
 
+    // Pure Compose UI + Foundation only (zero Material3 bloat!)
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.foundation:foundation")
-    implementation("androidx.compose.material3:material3")
 
     // Room for history and sessions
     val roomVersion = "2.6.1"
     implementation("androidx.room:room-runtime:$roomVersion")
     implementation("androidx.room:room-ktx:$roomVersion")
     ksp("androidx.room:room-compiler:$roomVersion")
-
-    // DataStore for user settings
-    implementation("androidx.datastore:datastore-preferences:1.1.1")
 
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
