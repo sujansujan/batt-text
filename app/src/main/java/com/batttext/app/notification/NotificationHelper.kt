@@ -26,7 +26,6 @@ import com.batttext.app.data.prefs.UserSettings
 import com.batttext.app.data.repository.BatterySnapshot
 import com.batttext.app.receiver.AlertDismissReceiver
 import java.util.Locale
-import kotlin.math.roundToInt
 
 class NotificationHelper(private val context: Context) {
 
@@ -37,27 +36,29 @@ class NotificationHelper(private val context: Context) {
     private val iconCache = object : LruCache<Int, IconCompat>(16) {}
 
     fun createChannels() {
-        val monitorChannel = NotificationChannel(
-            CHANNEL_MONITOR_ID,
-            context.getString(R.string.channel_monitor_name),
-            NotificationManager.IMPORTANCE_LOW
-        ).apply {
-            description = context.getString(R.string.channel_monitor_desc)
-            setShowBadge(false)
-            enableVibration(false)
-            setSound(null, null)
-        }
+        runCatching {
+            val monitorChannel = NotificationChannel(
+                CHANNEL_MONITOR_ID,
+                context.getString(R.string.channel_monitor_name),
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = context.getString(R.string.channel_monitor_desc)
+                setShowBadge(false)
+                enableVibration(false)
+                setSound(null, null)
+            }
 
-        val alertsChannel = NotificationChannel(
-            CHANNEL_ALERTS_ID,
-            context.getString(R.string.channel_alerts_name),
-            NotificationManager.IMPORTANCE_DEFAULT
-        ).apply {
-            description = context.getString(R.string.channel_alerts_desc)
-            setShowBadge(true)
-        }
+            val alertsChannel = NotificationChannel(
+                CHANNEL_ALERTS_ID,
+                context.getString(R.string.channel_alerts_name),
+                NotificationManager.IMPORTANCE_DEFAULT
+            ).apply {
+                description = context.getString(R.string.channel_alerts_desc)
+                setShowBadge(true)
+            }
 
-        notificationManager.createNotificationChannels(listOf(monitorChannel, alertsChannel))
+            notificationManager.createNotificationChannels(listOf(monitorChannel, alertsChannel))
+        }
     }
 
     fun hasNotificationPermission(): Boolean {
@@ -81,6 +82,9 @@ class NotificationHelper(private val context: Context) {
         settings: UserSettings,
         screenStats: ScreenDrainStats
     ): Notification {
+        // Ensure channels exist before building notification (prevents race condition if service starts early)
+        createChannels()
+
         val openIntent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
@@ -134,6 +138,7 @@ class NotificationHelper(private val context: Context) {
         }
 
         val builder = NotificationCompat.Builder(context, CHANNEL_MONITOR_ID)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle(compactLine)
             .setContentText("Tap to open BattText scoreboard")
             .setStyle(NotificationCompat.BigTextStyle().bigText(expandedBlock))
@@ -146,9 +151,9 @@ class NotificationHelper(private val context: Context) {
             .setContentIntent(contentPendingIntent)
 
         if (settings.dynamicPercentIcon) {
-            builder.setSmallIcon(getOrCreatePercentageIcon(snapshot.levelPercent))
-        } else {
-            builder.setSmallIcon(R.drawable.ic_launcher_foreground)
+            runCatching {
+                builder.setSmallIcon(getOrCreatePercentageIcon(snapshot.levelPercent))
+            }
         }
 
         return builder.build()
@@ -160,8 +165,10 @@ class NotificationHelper(private val context: Context) {
         screenStats: ScreenDrainStats
     ) {
         if (!hasNotificationPermission()) return
-        val notification = buildOngoingNotification(snapshot, settings, screenStats)
-        notificationManager.notify(ONGOING_NOTIFICATION_ID, notification)
+        runCatching {
+            val notification = buildOngoingNotification(snapshot, settings, screenStats)
+            notificationManager.notify(ONGOING_NOTIFICATION_ID, notification)
+        }
     }
 
     /**
@@ -175,43 +182,47 @@ class NotificationHelper(private val context: Context) {
     ) {
         if (!hasNotificationPermission()) return
 
-        val openIntent = Intent(context, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        runCatching {
+            val openIntent = Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }
+            val openPending = PendingIntent.getActivity(
+                context,
+                alertId,
+                openIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            val dismissIntent = Intent(context, AlertDismissReceiver::class.java).apply {
+                putExtra(AlertDismissReceiver.EXTRA_NOTIFICATION_ID, alertId)
+            }
+            val dismissPending = PendingIntent.getBroadcast(
+                context,
+                alertId + 1000,
+                dismissIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            val builder = NotificationCompat.Builder(context, CHANNEL_ALERTS_ID)
+                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setContentTitle(title)
+                .setContentText(body)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+                .setAutoCancel(true)
+                .setSilent(!playSound)
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .setCategory(NotificationCompat.CATEGORY_STATUS)
+                .setContentIntent(openPending)
+                .addAction(0, context.getString(R.string.action_dismiss), dismissPending)
+
+            notificationManager.notify(alertId, builder.build())
         }
-        val openPending = PendingIntent.getActivity(
-            context,
-            alertId,
-            openIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val dismissIntent = Intent(context, AlertDismissReceiver::class.java).apply {
-            putExtra(AlertDismissReceiver.EXTRA_NOTIFICATION_ID, alertId)
-        }
-        val dismissPending = PendingIntent.getBroadcast(
-            context,
-            alertId + 1000,
-            dismissIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val builder = NotificationCompat.Builder(context, CHANNEL_ALERTS_ID)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentTitle(title)
-            .setContentText(body)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
-            .setAutoCancel(true)
-            .setSilent(!playSound)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-            .setCategory(NotificationCompat.CATEGORY_STATUS)
-            .setContentIntent(openPending)
-            .addAction(0, context.getString(R.string.action_dismiss), dismissPending)
-
-        notificationManager.notify(alertId, builder.build())
     }
 
     fun cancelNotification(notificationId: Int) {
-        notificationManager.cancel(notificationId)
+        runCatching {
+            notificationManager.cancel(notificationId)
+        }
     }
 
     /**

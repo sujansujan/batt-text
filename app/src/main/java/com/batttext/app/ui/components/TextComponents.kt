@@ -54,16 +54,23 @@ private fun rememberCharCountForWidth(
     val measurer = rememberTextMeasurer()
     val fontFamily = BattTextTheme.fontFamily
     val density = LocalDensity.current
-    val maxWidthPx = with(density) { maxWidthDp.toPx() }
+    val safeWidthDp = if (maxWidthDp.value.isFinite() && maxWidthDp.value > 0f && maxWidthDp.value < 10_000f) {
+        maxWidthDp
+    } else {
+        360.dp
+    }
+    val maxWidthPx = with(density) { safeWidthDp.toPx() }
 
     return remember(maxWidthPx, sampleChar, fontFamily, fontSize) {
-        val sample = sampleChar.toString().repeat(20)
-        val measured = measurer.measure(
-            text = AnnotatedString(sample),
-            style = TextStyle(fontFamily = fontFamily, fontSize = fontSize)
-        ).size.width.toFloat()
-        val singleCharPx = (measured / 20f).coerceAtLeast(4f)
-        floor(maxWidthPx / singleCharPx).toInt().coerceAtLeast(16)
+        runCatching {
+            val sample = sampleChar.toString().repeat(20)
+            val measured = measurer.measure(
+                text = AnnotatedString(sample),
+                style = TextStyle(fontFamily = fontFamily, fontSize = fontSize)
+            ).size.width.toFloat()
+            val singleCharPx = (measured / 20f).coerceAtLeast(4f)
+            floor(maxWidthPx / singleCharPx).toInt().coerceIn(16, 300)
+        }.getOrDefault(48)
     }
 }
 

@@ -54,10 +54,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Start foreground telemetry service immediately
-        BatteryMonitorService.startService(this)
-
         setContent {
+            LaunchedEffect(Unit) {
+                BatteryMonitorService.startService(this@MainActivity)
+            }
             val settings by viewModel.settings.collectAsStateWithLifecycle()
             val snapshot by viewModel.snapshot.collectAsStateWithLifecycle()
             val screenStats by viewModel.screenStats.collectAsStateWithLifecycle()

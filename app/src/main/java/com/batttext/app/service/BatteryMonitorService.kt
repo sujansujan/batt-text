@@ -63,26 +63,12 @@ class BatteryMonitorService : LifecycleService() {
         isScreenInteractive = pm.isInteractive
         lastSliceTimestampMs = System.currentTimeMillis()
 
-        // Start foreground immediately with API 34 specialUse service type
         val initialSnap = app.batteryRepository.updateFromIntent(null, latestSettings.designCapacityMah)
         lastSliceBatteryLevel = initialSnap.levelPercent
         wasChargingLastSlice = initialSnap.isCharging
         lastPluggedState = initialSnap.isCharging
 
-        val notification = app.notificationHelper.buildOngoingNotification(
-            initialSnap,
-            latestSettings,
-            latestScreenStats
-        )
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(
-                NotificationHelper.ONGOING_NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-            )
-        } else {
-            startForeground(NotificationHelper.ONGOING_NOTIFICATION_ID, notification)
-        }
+        promoteToForegroundSafely(initialSnap)
 
         // Observe settings & screen stats changes so notification formatting updates immediately
         lifecycleScope.launch {
@@ -104,19 +90,40 @@ class BatteryMonitorService : LifecycleService() {
             addAction(Intent.ACTION_SCREEN_ON)
             addAction(Intent.ACTION_SCREEN_OFF)
         }
+        // System broadcasts on Android 14+ / Xiaomi HyperOS require RECEIVER_EXPORTED
         ContextCompat.registerReceiver(
             this,
             systemEventsReceiver,
             filter,
-            ContextCompat.RECEIVER_NOT_EXPORTED
+            ContextCompat.RECEIVER_EXPORTED
         )
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
         val snap = app.batteryRepository.updateFromIntent(null, latestSettings.designCapacityMah)
+        promoteToForegroundSafely(snap)
         app.notificationHelper.updateOngoingNotification(snap, latestSettings, latestScreenStats)
         return START_STICKY
+    }
+
+    private fun promoteToForegroundSafely(snap: BatterySnapshot) {
+        runCatching {
+            val notification = app.notificationHelper.buildOngoingNotification(
+                snap,
+                latestSettings,
+                latestScreenStats
+            )
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(
+                    NotificationHelper.ONGOING_NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                )
+            } else {
+                startForeground(NotificationHelper.ONGOING_NOTIFICATION_ID, notification)
+            }
+        }
     }
 
     override fun onDestroy() {
@@ -298,13 +305,17 @@ class BatteryMonitorService : LifecycleService() {
 
     companion object {
         fun startService(context: Context) {
-            val intent = Intent(context, BatteryMonitorService::class.java)
-            ContextCompat.startForegroundService(context, intent)
+            runCatching {
+                val intent = Intent(context, BatteryMonitorService::class.java)
+                ContextCompat.startForegroundService(context, intent)
+            }
         }
 
         fun stopService(context: Context) {
-            val intent = Intent(context, BatteryMonitorService::class.java)
-            context.stopService(intent)
+            runCatching {
+                val intent = Intent(context, BatteryMonitorService::class.java)
+                context.stopService(intent)
+            }
         }
     }
 }
