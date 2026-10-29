@@ -36,7 +36,7 @@ fun SettingsScreen(
     onToggleBackgroundMonitor: (Boolean) -> Unit,
     onCycleThemeMode: () -> Unit,
     onCycleFontMode: () -> Unit,
-    onCycleNotificationStyle: () -> Unit,
+    onCycleStatusBarIconMetric: (Boolean) -> Unit,
     onRequestNotificationPermission: () -> Unit,
     onRequestBatteryOptExemption: () -> Unit,
     onRequestShizukuOrRescan: () -> Unit,
@@ -54,6 +54,75 @@ fun SettingsScreen(
     }
 
     Column(modifier = Modifier.fillMaxWidth()) {
+        // 1. Notification & Status Bar Icon Customization
+        TextFramedBox(
+            title = "NOTIFICATION & ICON CUSTOMIZATION",
+            rightHeaderTag = "MINIMAL"
+        ) {
+            TextStepperRow(
+                label = "STATUS BAR ICON VALUE",
+                valueText = settings.statusBarIconMetric.label,
+                onDecrement = { onCycleStatusBarIconMetric(false) },
+                onIncrement = { onCycleStatusBarIconMetric(true) },
+                subtitle = "Choose LEVEL %, TEMP, CURRENT, WATTS, or STATIC"
+            )
+            TextDivider()
+            TextToggleRow(
+                label = "SHOW BATTERY %",
+                checked = settings.notifShowLevel,
+                onToggle = { scope.launch { settingsRepository.setNotifShowLevel(it) } }
+            )
+            TextToggleRow(
+                label = "SHOW LIVE CURRENT (mA)",
+                checked = settings.notifShowCurrent,
+                onToggle = { scope.launch { settingsRepository.setNotifShowCurrent(it) } }
+            )
+            TextToggleRow(
+                label = "SHOW LIVE POWER (W)",
+                checked = settings.notifShowPower,
+                onToggle = { scope.launch { settingsRepository.setNotifShowPower(it) } }
+            )
+            TextToggleRow(
+                label = "SHOW TEMPERATURE",
+                checked = settings.notifShowTemp,
+                onToggle = { scope.launch { settingsRepository.setNotifShowTemp(it) } }
+            )
+            TextToggleRow(
+                label = "SHOW VOLTAGE (V)",
+                checked = settings.notifShowVoltage,
+                onToggle = { scope.launch { settingsRepository.setNotifShowVoltage(it) } }
+            )
+            TextToggleRow(
+                label = "SHOW TIME REMAINING (ETA)",
+                checked = settings.notifShowEta,
+                onToggle = { scope.launch { settingsRepository.setNotifShowEta(it) } }
+            )
+            TextDivider()
+            TextToggleRow(
+                label = "SHOW ACTIVE DRAIN / HR",
+                checked = settings.notifShowActiveRate,
+                onToggle = { scope.launch { settingsRepository.setNotifShowActiveRate(it) } }
+            )
+            TextToggleRow(
+                label = "SHOW IDLE DRAIN / HR",
+                checked = settings.notifShowIdleRate,
+                onToggle = { scope.launch { settingsRepository.setNotifShowIdleRate(it) } }
+            )
+            TextToggleRow(
+                label = "SHOW DOZE STATUS",
+                checked = settings.notifShowDozeState,
+                onToggle = { scope.launch { settingsRepository.setNotifShowDozeState(it) } }
+            )
+            TextToggleRow(
+                label = "SHOW DEEP SLEEP %",
+                checked = settings.notifShowDeepSleepPct,
+                onToggle = { scope.launch { settingsRepository.setNotifShowDeepSleepPct(it) } }
+            )
+        }
+
+        Spacer(modifier = Modifier.height(6.dp))
+
+        // 2. Efficiency & Background Service
         TextFramedBox(
             title = "EFFICIENCY & BACKGROUND SERVICE",
             rightHeaderTag = "ZERO-POLL"
@@ -110,6 +179,7 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(6.dp))
 
+        // 3. Display & Typography
         TextFramedBox(
             title = "DISPLAY & TYPOGRAPHY",
             rightHeaderTag = "DRACULA / ALUCARD"
@@ -147,6 +217,7 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(6.dp))
 
+        // 4. Alert Thresholds
         TextFramedBox(
             title = "ALERT THRESHOLDS",
             rightHeaderTag = "ONE-SHOT EVENTS"
@@ -246,6 +317,7 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(6.dp))
 
+        // 5. Capacity & Storage
         TextFramedBox(
             title = "CAPACITY & STORAGE",
             rightHeaderTag = "AUTO / SHIZUKU"
@@ -286,21 +358,6 @@ fun SettingsScreen(
                     scope.launch { settingsRepository.setRetentionDays(settings.retentionDays + 1) }
                 },
                 subtitle = "Automatically prune samples older than N days"
-            )
-            TextDivider()
-            TextStepperRow(
-                label = "NOTIF EXPANDED STYLE",
-                valueText = settings.notificationStyle.name,
-                onDecrement = onCycleNotificationStyle,
-                onIncrement = onCycleNotificationStyle,
-                subtitle = "COMPACT vs DETAILED (includes capacity)"
-            )
-            TextDivider()
-            TextToggleRow(
-                label = "DYNAMIC DIGIT STATUS ICON",
-                checked = settings.dynamicPercentIcon,
-                onToggle = { scope.launch { settingsRepository.setDynamicPercentIcon(it) } },
-                subtitle = "Draw battery % as plain digits in status bar"
             )
             TextDivider()
             Row(

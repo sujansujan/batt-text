@@ -191,7 +191,7 @@ class MainActivity : ComponentActivity() {
                                 onToggleBackgroundMonitor = viewModel::toggleBackgroundMonitor,
                                 onCycleThemeMode = viewModel::cycleThemeMode,
                                 onCycleFontMode = viewModel::cycleFontMode,
-                                onCycleNotificationStyle = viewModel::cycleNotificationStyle,
+                                onCycleStatusBarIconMetric = viewModel::cycleStatusBarIconMetric,
                                 onRequestNotificationPermission = { showNotifExplainModal = true },
                                 onRequestBatteryOptExemption = { showDozeExplainModal = true },
                                 onRequestShizukuOrRescan = viewModel::rescanHardwareWithShizuku,

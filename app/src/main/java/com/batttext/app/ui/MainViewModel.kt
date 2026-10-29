@@ -9,8 +9,8 @@ import com.batttext.app.BattTextApp
 import com.batttext.app.data.db.BatterySampleEntity
 import com.batttext.app.data.db.BatterySessionEntity
 import com.batttext.app.data.prefs.FontMode
-import com.batttext.app.data.prefs.NotificationStyle
 import com.batttext.app.data.prefs.ScreenDrainStats
+import com.batttext.app.data.prefs.StatusBarIconMetric
 import com.batttext.app.data.prefs.ThemeMode
 import com.batttext.app.data.prefs.UserSettings
 import com.batttext.app.data.repository.BatterySnapshot
@@ -63,7 +63,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     init {
-        // Discover hardware specs once on IO thread at startup
         viewModelScope.launch(Dispatchers.IO) {
             repository.refreshHardwareSpecs(settings.value.designCapacityOverrideMah)
         }
@@ -142,13 +141,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun cycleNotificationStyle() {
+    fun cycleStatusBarIconMetric(forward: Boolean = true) {
         viewModelScope.launch {
-            val next = when (settings.value.notificationStyle) {
-                NotificationStyle.COMPACT -> NotificationStyle.DETAILED
-                NotificationStyle.DETAILED -> NotificationStyle.COMPACT
+            val entries = StatusBarIconMetric.entries
+            val currentIdx = entries.indexOf(settings.value.statusBarIconMetric).coerceAtLeast(0)
+            val nextIdx = if (forward) {
+                (currentIdx + 1) % entries.size
+            } else {
+                (currentIdx - 1 + entries.size) % entries.size
             }
-            settingsRepository.setNotificationStyle(next)
+            settingsRepository.setStatusBarIconMetric(entries[nextIdx])
         }
     }
 }

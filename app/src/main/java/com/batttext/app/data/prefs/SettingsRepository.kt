@@ -16,7 +16,17 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(na
 
 enum class ThemeMode { AUTO, DARK, LIGHT }
 enum class FontMode { SYSTEM, MONOSPACE }
-enum class NotificationStyle { COMPACT, DETAILED }
+
+/**
+ * Which live value to render as plain-text digits in the status bar icon.
+ */
+enum class StatusBarIconMetric(val label: String) {
+    LEVEL("LEVEL %"),
+    TEMPERATURE("TEMP"),
+    CURRENT("CURRENT"),
+    POWER("WATTS"),
+    STATIC("STATIC [███]")
+}
 
 data class UserSettings(
     val themeMode: ThemeMode = ThemeMode.AUTO,
@@ -29,8 +39,23 @@ data class UserSettings(
     val retentionDays: Int = 14,
     val backgroundMonitorEnabled: Boolean = true,
     val startOnBoot: Boolean = true,
-    val notificationStyle: NotificationStyle = NotificationStyle.COMPACT,
-    val dynamicPercentIcon: Boolean = true,
+
+    // Status bar icon customization
+    val statusBarIconMetric: StatusBarIconMetric = StatusBarIconMetric.LEVEL,
+
+    // Individual toggles for what appears in the notification (uncluttered defaults, no health/capacity/charging status)
+    val notifShowLevel: Boolean = true,
+    val notifShowCurrent: Boolean = true,
+    val notifShowPower: Boolean = false,
+    val notifShowTemp: Boolean = true,
+    val notifShowVoltage: Boolean = false,
+    val notifShowEta: Boolean = true,
+    val notifShowActiveRate: Boolean = true,
+    val notifShowIdleRate: Boolean = true,
+    val notifShowDozeState: Boolean = true,
+    val notifShowDeepSleepPct: Boolean = false,
+
+    // Threshold alerts
     val alertSoundEnabled: Boolean = true,
     val alertChargeLimitEnabled: Boolean = true,
     val alertChargeLimitPercent: Int = 80,
@@ -84,8 +109,19 @@ class SettingsRepository(private val context: Context) {
         val RETENTION_DAYS = intPreferencesKey("retention_days")
         val BG_MONITOR_EN = booleanPreferencesKey("bg_monitor_en")
         val START_ON_BOOT = booleanPreferencesKey("start_on_boot")
-        val NOTIF_STYLE = stringPreferencesKey("notif_style")
-        val DYNAMIC_PERCENT_ICON = booleanPreferencesKey("dynamic_percent_icon")
+
+        val STATUS_BAR_ICON_METRIC = stringPreferencesKey("status_bar_icon_metric")
+        val NOTIF_SHOW_LEVEL = booleanPreferencesKey("notif_show_level")
+        val NOTIF_SHOW_CURRENT = booleanPreferencesKey("notif_show_current")
+        val NOTIF_SHOW_POWER = booleanPreferencesKey("notif_show_power")
+        val NOTIF_SHOW_TEMP = booleanPreferencesKey("notif_show_temp")
+        val NOTIF_SHOW_VOLTAGE = booleanPreferencesKey("notif_show_voltage")
+        val NOTIF_SHOW_ETA = booleanPreferencesKey("notif_show_eta")
+        val NOTIF_SHOW_ACTIVE_RATE = booleanPreferencesKey("notif_show_active_rate")
+        val NOTIF_SHOW_IDLE_RATE = booleanPreferencesKey("notif_show_idle_rate")
+        val NOTIF_SHOW_DOZE = booleanPreferencesKey("notif_show_doze")
+        val NOTIF_SHOW_DEEP_SLEEP = booleanPreferencesKey("notif_show_deep_sleep")
+
         val ALERT_SOUND = booleanPreferencesKey("alert_sound")
         val ALERT_LIMIT_EN = booleanPreferencesKey("alert_limit_en")
         val ALERT_LIMIT_PCT = intPreferencesKey("alert_limit_pct")
@@ -118,8 +154,22 @@ class SettingsRepository(private val context: Context) {
             retentionDays = prefs[Keys.RETENTION_DAYS] ?: 14,
             backgroundMonitorEnabled = prefs[Keys.BG_MONITOR_EN] ?: true,
             startOnBoot = prefs[Keys.START_ON_BOOT] ?: true,
-            notificationStyle = runCatching { NotificationStyle.valueOf(prefs[Keys.NOTIF_STYLE] ?: "COMPACT") }.getOrDefault(NotificationStyle.COMPACT),
-            dynamicPercentIcon = prefs[Keys.DYNAMIC_PERCENT_ICON] ?: true,
+
+            statusBarIconMetric = runCatching {
+                StatusBarIconMetric.valueOf(prefs[Keys.STATUS_BAR_ICON_METRIC] ?: "LEVEL")
+            }.getOrDefault(StatusBarIconMetric.LEVEL),
+
+            notifShowLevel = prefs[Keys.NOTIF_SHOW_LEVEL] ?: true,
+            notifShowCurrent = prefs[Keys.NOTIF_SHOW_CURRENT] ?: true,
+            notifShowPower = prefs[Keys.NOTIF_SHOW_POWER] ?: false,
+            notifShowTemp = prefs[Keys.NOTIF_SHOW_TEMP] ?: true,
+            notifShowVoltage = prefs[Keys.NOTIF_SHOW_VOLTAGE] ?: false,
+            notifShowEta = prefs[Keys.NOTIF_SHOW_ETA] ?: true,
+            notifShowActiveRate = prefs[Keys.NOTIF_SHOW_ACTIVE_RATE] ?: true,
+            notifShowIdleRate = prefs[Keys.NOTIF_SHOW_IDLE_RATE] ?: true,
+            notifShowDozeState = prefs[Keys.NOTIF_SHOW_DOZE] ?: true,
+            notifShowDeepSleepPct = prefs[Keys.NOTIF_SHOW_DEEP_SLEEP] ?: false,
+
             alertSoundEnabled = prefs[Keys.ALERT_SOUND] ?: true,
             alertChargeLimitEnabled = prefs[Keys.ALERT_LIMIT_EN] ?: true,
             alertChargeLimitPercent = prefs[Keys.ALERT_LIMIT_PCT] ?: 80,
@@ -157,8 +207,21 @@ class SettingsRepository(private val context: Context) {
     suspend fun setRetentionDays(days: Int) = context.dataStore.edit { it[Keys.RETENTION_DAYS] = days.coerceIn(1, 90) }
     suspend fun setBackgroundMonitorEnabled(enabled: Boolean) = context.dataStore.edit { it[Keys.BG_MONITOR_EN] = enabled }
     suspend fun setStartOnBoot(enabled: Boolean) = context.dataStore.edit { it[Keys.START_ON_BOOT] = enabled }
-    suspend fun setNotificationStyle(style: NotificationStyle) = context.dataStore.edit { it[Keys.NOTIF_STYLE] = style.name }
-    suspend fun setDynamicPercentIcon(enabled: Boolean) = context.dataStore.edit { it[Keys.DYNAMIC_PERCENT_ICON] = enabled }
+
+    suspend fun setStatusBarIconMetric(metric: StatusBarIconMetric) = context.dataStore.edit {
+        it[Keys.STATUS_BAR_ICON_METRIC] = metric.name
+    }
+    suspend fun setNotifShowLevel(enabled: Boolean) = context.dataStore.edit { it[Keys.NOTIF_SHOW_LEVEL] = enabled }
+    suspend fun setNotifShowCurrent(enabled: Boolean) = context.dataStore.edit { it[Keys.NOTIF_SHOW_CURRENT] = enabled }
+    suspend fun setNotifShowPower(enabled: Boolean) = context.dataStore.edit { it[Keys.NOTIF_SHOW_POWER] = enabled }
+    suspend fun setNotifShowTemp(enabled: Boolean) = context.dataStore.edit { it[Keys.NOTIF_SHOW_TEMP] = enabled }
+    suspend fun setNotifShowVoltage(enabled: Boolean) = context.dataStore.edit { it[Keys.NOTIF_SHOW_VOLTAGE] = enabled }
+    suspend fun setNotifShowEta(enabled: Boolean) = context.dataStore.edit { it[Keys.NOTIF_SHOW_ETA] = enabled }
+    suspend fun setNotifShowActiveRate(enabled: Boolean) = context.dataStore.edit { it[Keys.NOTIF_SHOW_ACTIVE_RATE] = enabled }
+    suspend fun setNotifShowIdleRate(enabled: Boolean) = context.dataStore.edit { it[Keys.NOTIF_SHOW_IDLE_RATE] = enabled }
+    suspend fun setNotifShowDozeState(enabled: Boolean) = context.dataStore.edit { it[Keys.NOTIF_SHOW_DOZE] = enabled }
+    suspend fun setNotifShowDeepSleepPct(enabled: Boolean) = context.dataStore.edit { it[Keys.NOTIF_SHOW_DEEP_SLEEP] = enabled }
+
     suspend fun setAlertSoundEnabled(enabled: Boolean) = context.dataStore.edit { it[Keys.ALERT_SOUND] = enabled }
     suspend fun setAlertChargeLimitEnabled(enabled: Boolean) = context.dataStore.edit { it[Keys.ALERT_LIMIT_EN] = enabled }
     suspend fun setAlertChargeLimitPercent(pct: Int) = context.dataStore.edit { it[Keys.ALERT_LIMIT_PCT] = pct.coerceIn(50, 99) }
