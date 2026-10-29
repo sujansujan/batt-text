@@ -61,8 +61,8 @@ class HardwareSpecReader(private val context: Context) {
 
     /**
      * Discovers all device and battery hardware specs using:
-     * 1. Shizuku privileged shell (`dumpsys battery` & `/sys/class/power_supply/battery/*`) when granted
-     * 2. Direct world-readable `/sys/class/power_supply/battery/*` sysfs nodes
+     * 1. Shizuku privileged shell (`dumpsys battery` & `/sys/class/power_supply/battery/`) when granted
+     * 2. Direct world-readable `/sys/class/power_supply/battery/` sysfs nodes
      * 3. Android internal `com.android.internal.os.PowerProfile` reflection (`getBatteryCapacity()`)
      */
     fun discoverSpecs(forceRefresh: Boolean = false): DeviceHardwareSpecs {
