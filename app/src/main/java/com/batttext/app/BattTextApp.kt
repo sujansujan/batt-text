@@ -4,6 +4,7 @@ import android.app.Application
 import com.batttext.app.data.db.AppDatabase
 import com.batttext.app.data.prefs.SettingsRepository
 import com.batttext.app.data.repository.BatteryRepository
+import com.batttext.app.data.shizuku.HardwareSpecReader
 import com.batttext.app.notification.NotificationHelper
 import java.io.File
 import java.io.PrintWriter
@@ -15,6 +16,9 @@ class BattTextApp : Application() {
         private set
 
     lateinit var settingsRepository: SettingsRepository
+        private set
+
+    lateinit var hardwareSpecReader: HardwareSpecReader
         private set
 
     lateinit var batteryRepository: BatteryRepository
@@ -30,7 +34,13 @@ class BattTextApp : Application() {
 
         database = AppDatabase.getInstance(this)
         settingsRepository = SettingsRepository(this)
-        batteryRepository = BatteryRepository(this, database.batteryDao(), settingsRepository)
+        hardwareSpecReader = HardwareSpecReader(this)
+        batteryRepository = BatteryRepository(
+            context = this,
+            dao = database.batteryDao(),
+            settingsRepository = settingsRepository,
+            hardwareSpecReader = hardwareSpecReader
+        )
         notificationHelper = NotificationHelper(this)
         notificationHelper.createChannels()
     }

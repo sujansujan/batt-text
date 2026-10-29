@@ -23,9 +23,11 @@ data class UserSettings(
     val fontMode: FontMode = FontMode.SYSTEM,
     val pureAsciiBorders: Boolean = false,
     val useFahrenheit: Boolean = false,
-    val designCapacityMah: Int = 4500,
-    val sampleIntervalMinutes: Int = 5,
+    // 0 means use auto-detected hardware capacity from PowerProfile / Kernel sysfs / Shizuku
+    val designCapacityOverrideMah: Int = 0,
+    val sampleIntervalMinutes: Int = 10,
     val retentionDays: Int = 14,
+    val backgroundMonitorEnabled: Boolean = true,
     val startOnBoot: Boolean = true,
     val notificationStyle: NotificationStyle = NotificationStyle.COMPACT,
     val dynamicPercentIcon: Boolean = true,
@@ -42,12 +44,6 @@ data class UserSettings(
     val alertPlugStateChange: Boolean = false
 )
 
-/**
- * Screen-on, Screen-off, Deep Sleep, and Awake (Wakelock) Idle counters persisted across restarts.
- * Deep sleep is calculated during screen-off slices using:
- *   deepSleepMs = elapsedRealtimeDelta - uptimeMillisDelta
- *   awakeIdleMs = uptimeMillisDelta (while screen is off)
- */
 data class ScreenDrainStats(
     val screenOnDrainPercent: Float = 0f,
     val screenOffDrainPercent: Float = 0f,
@@ -56,7 +52,25 @@ data class ScreenDrainStats(
     val deepSleepDurationMs: Long = 0L,
     val awakeIdleDurationMs: Long = 0L,
     val resetTimestampMs: Long = System.currentTimeMillis()
-)
+) {
+    /**
+     * Active (screen-on) consumption rate in %/hr, or null if < 2 minutes of screen-on discharge recorded.
+     */
+    val activeDrainRatePctPerHour: Float?
+        get() {
+            val hours = screenOnDurationMs / 3_600_000f
+            return if (hours >= 0.03f) screenOnDrainPercent / hours else null
+        }
+
+    /**
+     * Idle (screen-off) consumption rate in %/hr, or null if < 2 minutes of screen-off discharge recorded.
+     */
+    val idleDrainRatePctPerHour: Float?
+        get() {
+            val hours = screenOffDurationMs / 3_600_000f
+            return if (hours >= 0.03f) screenOffDrainPercent / hours else null
+        }
+}
 
 class SettingsRepository(private val context: Context) {
 
@@ -65,9 +79,10 @@ class SettingsRepository(private val context: Context) {
         val FONT_MODE = stringPreferencesKey("font_mode")
         val PURE_ASCII = booleanPreferencesKey("pure_ascii")
         val USE_FAHRENHEIT = booleanPreferencesKey("use_fahrenheit")
-        val DESIGN_CAP_MAH = intPreferencesKey("design_cap_mah")
+        val DESIGN_CAP_OVERRIDE_MAH = intPreferencesKey("design_cap_override_mah")
         val SAMPLE_INTERVAL_MIN = intPreferencesKey("sample_interval_min")
         val RETENTION_DAYS = intPreferencesKey("retention_days")
+        val BG_MONITOR_EN = booleanPreferencesKey("bg_monitor_en")
         val START_ON_BOOT = booleanPreferencesKey("start_on_boot")
         val NOTIF_STYLE = stringPreferencesKey("notif_style")
         val DYNAMIC_PERCENT_ICON = booleanPreferencesKey("dynamic_percent_icon")
@@ -83,7 +98,6 @@ class SettingsRepository(private val context: Context) {
         val ALERT_TEMP_C = intPreferencesKey("alert_temp_c")
         val ALERT_PLUG_CHANGE = booleanPreferencesKey("alert_plug_change")
 
-        // Screen on/off & deep sleep counters (stored in milli-percent for integer precision)
         val SCREEN_ON_DRAIN_MPCT = intPreferencesKey("screen_on_drain_mpct")
         val SCREEN_OFF_DRAIN_MPCT = intPreferencesKey("screen_off_drain_mpct")
         val SCREEN_ON_DURATION_MS = longPreferencesKey("screen_on_duration_ms")
@@ -99,9 +113,10 @@ class SettingsRepository(private val context: Context) {
             fontMode = runCatching { FontMode.valueOf(prefs[Keys.FONT_MODE] ?: "SYSTEM") }.getOrDefault(FontMode.SYSTEM),
             pureAsciiBorders = prefs[Keys.PURE_ASCII] ?: false,
             useFahrenheit = prefs[Keys.USE_FAHRENHEIT] ?: false,
-            designCapacityMah = prefs[Keys.DESIGN_CAP_MAH] ?: 4500,
-            sampleIntervalMinutes = prefs[Keys.SAMPLE_INTERVAL_MIN] ?: 5,
+            designCapacityOverrideMah = prefs[Keys.DESIGN_CAP_OVERRIDE_MAH] ?: 0,
+            sampleIntervalMinutes = prefs[Keys.SAMPLE_INTERVAL_MIN] ?: 10,
             retentionDays = prefs[Keys.RETENTION_DAYS] ?: 14,
+            backgroundMonitorEnabled = prefs[Keys.BG_MONITOR_EN] ?: true,
             startOnBoot = prefs[Keys.START_ON_BOOT] ?: true,
             notificationStyle = runCatching { NotificationStyle.valueOf(prefs[Keys.NOTIF_STYLE] ?: "COMPACT") }.getOrDefault(NotificationStyle.COMPACT),
             dynamicPercentIcon = prefs[Keys.DYNAMIC_PERCENT_ICON] ?: true,
@@ -135,9 +150,12 @@ class SettingsRepository(private val context: Context) {
     suspend fun setFontMode(mode: FontMode) = context.dataStore.edit { it[Keys.FONT_MODE] = mode.name }
     suspend fun setPureAsciiBorders(enabled: Boolean) = context.dataStore.edit { it[Keys.PURE_ASCII] = enabled }
     suspend fun setUseFahrenheit(enabled: Boolean) = context.dataStore.edit { it[Keys.USE_FAHRENHEIT] = enabled }
-    suspend fun setDesignCapacityMah(mah: Int) = context.dataStore.edit { it[Keys.DESIGN_CAP_MAH] = mah.coerceIn(500, 25000) }
+    suspend fun setDesignCapacityOverrideMah(mah: Int) = context.dataStore.edit {
+        it[Keys.DESIGN_CAP_OVERRIDE_MAH] = if (mah <= 0) 0 else mah.coerceIn(1000, 25000)
+    }
     suspend fun setSampleIntervalMinutes(minutes: Int) = context.dataStore.edit { it[Keys.SAMPLE_INTERVAL_MIN] = minutes.coerceIn(1, 60) }
     suspend fun setRetentionDays(days: Int) = context.dataStore.edit { it[Keys.RETENTION_DAYS] = days.coerceIn(1, 90) }
+    suspend fun setBackgroundMonitorEnabled(enabled: Boolean) = context.dataStore.edit { it[Keys.BG_MONITOR_EN] = enabled }
     suspend fun setStartOnBoot(enabled: Boolean) = context.dataStore.edit { it[Keys.START_ON_BOOT] = enabled }
     suspend fun setNotificationStyle(style: NotificationStyle) = context.dataStore.edit { it[Keys.NOTIF_STYLE] = style.name }
     suspend fun setDynamicPercentIcon(enabled: Boolean) = context.dataStore.edit { it[Keys.DYNAMIC_PERCENT_ICON] = enabled }

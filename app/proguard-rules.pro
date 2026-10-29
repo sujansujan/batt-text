@@ -7,5 +7,7 @@
 -keepclassmembers class * extends androidx.datastore.preferences.protobuf.GeneratedMessageLite {
     <fields>;
 }
+-keep class rikka.shizuku.** { *; }
 -dontwarn kotlin.**
 -dontwarn kotlinx.coroutines.**
+-dontwarn rikka.shizuku.**

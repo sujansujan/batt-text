@@ -26,10 +26,6 @@ import androidx.core.view.WindowCompat
 import com.batttext.app.data.prefs.FontMode
 import com.batttext.app.data.prefs.ThemeMode
 
-/**
- * Semantic theme roles for BattText.
- * No screen hardcodes colors; all UI components reference BattTextTheme.colors.
- */
 @Immutable
 data class BattTextColors(
     val isDark: Boolean,
@@ -46,9 +42,6 @@ data class BattTextColors(
     val border: Color
 )
 
-/**
- * Dracula-inspired dark palette: crisp high-contrast terminal look.
- */
 val DraculaPalette = BattTextColors(
     isDark = true,
     background = Color(0xFF282A36),
@@ -64,10 +57,6 @@ val DraculaPalette = BattTextColors(
     border = Color(0xFF6272A4)
 )
 
-/**
- * Alucard-inspired light palette (official Dracula light variant):
- * warm paper background with deep high-contrast ink colors.
- */
 val AlucardPalette = BattTextColors(
     isDark = false,
     background = Color(0xFFFFFBEB),
@@ -83,10 +72,6 @@ val AlucardPalette = BattTextColors(
     border = Color(0xFF8E8768)
 )
 
-/**
- * Border character set so every box, table, divider, and progress bar can switch cleanly
- * between Unicode box-drawing characters and pure 7-bit ASCII characters.
- */
 @Immutable
 data class BorderCharset(
     val topLeft: Char,
@@ -145,10 +130,6 @@ val AsciiCharset = BorderCharset(
     sparkChars = "_.,-~=+*#"
 )
 
-/**
- * Compose 1.7+ compliant IndicationNodeFactory that draws zero ripples.
- * Fixes the IllegalArgumentException crash when overriding LocalIndication inside MaterialTheme.
- */
 object NoIndicationNodeFactory : IndicationNodeFactory {
     private class NoIndicationNode : Modifier.Node(), DrawModifierNode {
         override fun ContentDrawScope.draw() {

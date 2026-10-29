@@ -10,6 +10,8 @@ import com.batttext.app.data.db.BatteryDao
 import com.batttext.app.data.db.BatterySampleEntity
 import com.batttext.app.data.db.BatterySessionEntity
 import com.batttext.app.data.prefs.SettingsRepository
+import com.batttext.app.data.shizuku.DeviceHardwareSpecs
+import com.batttext.app.data.shizuku.HardwareSpecReader
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -17,9 +19,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
-/**
- * Normalized snapshot of live battery hardware properties, including Deep Sleep and Doze state.
- */
 data class BatterySnapshot(
     val timestampMillis: Long = System.currentTimeMillis(),
     val levelPercent: Int = 0,
@@ -34,7 +33,7 @@ data class BatterySnapshot(
     val technology: String = "LI-ION",
     val chargeCounterMah: Int? = null,
     val estimatedFullCapacityMah: Int? = null,
-    val estimatedDesignCapacityMah: Int = 4500,
+    val effectiveDesignCapacityMah: Int = 5000,
     val speedPercentPerHour: Float = 0f,
     val etaMinutes: Int? = null,
     val powerWatts: Float = 0f,
@@ -43,13 +42,15 @@ data class BatterySnapshot(
     val isPowerSaveMode: Boolean = false,
     val bootElapsedRealtimeMs: Long = 0L,
     val bootDeepSleepMs: Long = 0L,
-    val bootAwakeUptimeMs: Long = 0L
+    val bootAwakeUptimeMs: Long = 0L,
+    val hardwareSpecs: DeviceHardwareSpecs = DeviceHardwareSpecs()
 )
 
 class BatteryRepository(
     private val context: Context,
     private val dao: BatteryDao,
-    private val settingsRepository: SettingsRepository
+    private val settingsRepository: SettingsRepository,
+    private val hardwareSpecReader: HardwareSpecReader
 ) {
     private val batteryManager = context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
     private val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -57,7 +58,6 @@ class BatteryRepository(
     private val _snapshot = MutableStateFlow(BatterySnapshot())
     val snapshot: StateFlow<BatterySnapshot> = _snapshot.asStateFlow()
 
-    // Rolling window of recent current readings (up to 12 samples) for stable ETA and %/hr calculation
     private val recentCurrentsMa = ArrayDeque<Int>(12)
 
     private var lastSampleSavedAtMillis: Long = 0L
@@ -67,15 +67,19 @@ class BatteryRepository(
     init {
         runCatching {
             val sticky = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-            updateFromIntent(sticky, designCapMah = 4500)
+            updateFromIntent(sticky, designCapOverrideMah = 0)
         }
     }
 
-    /**
-     * Reads both the ACTION_BATTERY_CHANGED intent extras, BatteryManager real-time properties,
-     * and SystemClock / PowerManager Doze & Deep Sleep counters.
-     */
-    fun updateFromIntent(intent: Intent?, designCapMah: Int): BatterySnapshot {
+    fun refreshHardwareSpecs(designCapOverrideMah: Int): BatterySnapshot {
+        hardwareSpecReader.discoverSpecs(forceRefresh = true)
+        return updateFromIntent(null, designCapOverrideMah)
+    }
+
+    fun updateFromIntent(intent: Intent?, designCapOverrideMah: Int): BatterySnapshot {
+        val hwSpecs = hardwareSpecReader.discoverSpecs(forceRefresh = false)
+        val designCapMah = if (designCapOverrideMah > 0) designCapOverrideMah else hwSpecs.autoDesignCapacityMah
+
         val src = intent ?: runCatching {
             context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         }.getOrNull()
@@ -165,7 +169,8 @@ class BatteryRepository(
             null
         }
 
-        val estFullCapMah = if (chargeCounterMah != null && levelPct >= 15) {
+        // Prefer kernel learned full capacity if available via sysfs/Shizuku, else compute from CHARGE_COUNTER
+        val estFullCapMah = hwSpecs.kernelFullCapacityMah ?: if (chargeCounterMah != null && levelPct >= 15) {
             ((chargeCounterMah.toFloat() / levelPct.toFloat()) * 100f).roundToInt()
                 .takeIf { it in 500..25000 }
         } else {
@@ -203,7 +208,6 @@ class BatteryRepository(
         val isDoze = runCatching { powerManager.isDeviceIdleMode }.getOrDefault(false)
         val isPowerSave = runCatching { powerManager.isPowerSaveMode }.getOrDefault(false)
 
-        // System-wide Deep Sleep since boot: elapsedRealtime includes deep sleep, uptimeMillis does not
         val elapsedMs = SystemClock.elapsedRealtime().coerceAtLeast(1L)
         val uptimeMs = SystemClock.uptimeMillis().coerceIn(0L, elapsedMs)
         val deepSleepMs = (elapsedMs - uptimeMs).coerceAtLeast(0L)
@@ -222,7 +226,7 @@ class BatteryRepository(
             technology = tech,
             chargeCounterMah = chargeCounterMah,
             estimatedFullCapacityMah = estFullCapMah,
-            estimatedDesignCapacityMah = designCapMah,
+            effectiveDesignCapacityMah = designCapMah,
             speedPercentPerHour = speedPctPerHr,
             etaMinutes = etaMinutes,
             powerWatts = powerWatts,
@@ -231,7 +235,8 @@ class BatteryRepository(
             isPowerSaveMode = isPowerSave,
             bootElapsedRealtimeMs = elapsedMs,
             bootDeepSleepMs = deepSleepMs,
-            bootAwakeUptimeMs = uptimeMs
+            bootAwakeUptimeMs = uptimeMs,
+            hardwareSpecs = hwSpecs
         )
         _snapshot.value = snap
         return snap

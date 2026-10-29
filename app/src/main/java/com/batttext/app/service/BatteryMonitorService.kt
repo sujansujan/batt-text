@@ -22,8 +22,14 @@ import kotlinx.coroutines.launch
 import java.util.Locale
 
 /**
- * Lightweight, event-driven foreground service.
- * Tracks live battery broadcasts, screen on/off drain, and Deep Sleep vs Awake (Wakelock) idle time.
+ * Ultra-low-overhead, zero-polling event-driven service.
+ *
+ * Efficiency optimization:
+ * - Zero wake locks, zero timers, zero background coroutines spinning.
+ * - When the screen turns OFF (`ACTION_SCREEN_OFF`) and the device is unplugged, we UNREGISTER the
+ *   `ACTION_BATTERY_CHANGED` receiver so the app process does zero work while your phone is in your
+ *   pocket or in Deep Sleep! When you turn the screen back ON (`ACTION_SCREEN_ON`) or plug/unplug power,
+ *   it immediately computes the exact screen-off drain & deep sleep delta and resumes live updates.
  */
 class BatteryMonitorService : LifecycleService() {
 
@@ -33,14 +39,14 @@ class BatteryMonitorService : LifecycleService() {
     private var latestSettings = UserSettings()
     private var latestScreenStats = ScreenDrainStats()
 
-    // State trackers for screen-on/off drain and Deep Sleep vs Awake Idle accounting
     private var isScreenInteractive: Boolean = true
+    private var isBatteryReceiverRegistered: Boolean = false
+
     private var lastSliceElapsedMs: Long = SystemClock.elapsedRealtime()
     private var lastSliceUptimeMs: Long = SystemClock.uptimeMillis()
     private var lastSliceBatteryLevel: Int = -1
     private var wasChargingLastSlice: Boolean = false
 
-    // One-shot latches so each alert fires once per threshold crossing and resets cleanly
     private var firedChargeLimit = false
     private var firedFullCharge = false
     private var firedLowBattery = false
@@ -48,15 +54,26 @@ class BatteryMonitorService : LifecycleService() {
     private var firedHighTemp = false
     private var lastPluggedState: Boolean? = null
 
-    private val systemEventsReceiver = object : BroadcastReceiver() {
+    private val batteryBroadcastReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action == Intent.ACTION_BATTERY_CHANGED) {
+                handleBatteryBroadcast(intent)
+            }
+        }
+    }
+
+    private val screenAndPowerReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             when (intent.action) {
-                Intent.ACTION_BATTERY_CHANGED -> handleBatteryBroadcast(intent)
                 Intent.ACTION_SCREEN_ON -> handleScreenStateChange(screenOn = true)
                 Intent.ACTION_SCREEN_OFF -> handleScreenStateChange(screenOn = false)
+                Intent.ACTION_POWER_CONNECTED,
+                Intent.ACTION_POWER_DISCONNECTED,
                 PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED,
                 PowerManager.ACTION_POWER_SAVE_MODE_CHANGED -> {
-                    val snap = app.batteryRepository.updateFromIntent(null, latestSettings.designCapacityMah)
+                    val snap = app.batteryRepository.updateFromIntent(null, latestSettings.designCapacityOverrideMah)
+                    syncBatteryReceiverRegistration(screenOn = isScreenInteractive, isCharging = snap.isCharging)
+                    evaluateThresholdsAndAlert(snap, latestSettings)
                     app.notificationHelper.updateOngoingNotification(snap, latestSettings, latestScreenStats)
                 }
             }
@@ -70,7 +87,7 @@ class BatteryMonitorService : LifecycleService() {
         lastSliceElapsedMs = SystemClock.elapsedRealtime()
         lastSliceUptimeMs = SystemClock.uptimeMillis()
 
-        val initialSnap = app.batteryRepository.updateFromIntent(null, latestSettings.designCapacityMah)
+        val initialSnap = app.batteryRepository.updateFromIntent(null, latestSettings.designCapacityOverrideMah)
         lastSliceBatteryLevel = initialSnap.levelPercent
         wasChargingLastSlice = initialSnap.isCharging
         lastPluggedState = initialSnap.isCharging
@@ -86,29 +103,60 @@ class BatteryMonitorService : LifecycleService() {
             }.collectLatest { (settings, screenStats) ->
                 latestSettings = settings
                 latestScreenStats = screenStats
-                val snap = app.batteryRepository.updateFromIntent(null, settings.designCapacityMah)
+                if (!settings.backgroundMonitorEnabled) {
+                    stopSelf()
+                    return@collectLatest
+                }
+                val snap = app.batteryRepository.updateFromIntent(null, settings.designCapacityOverrideMah)
                 app.notificationHelper.updateOngoingNotification(snap, settings, screenStats)
             }
         }
 
-        val filter = IntentFilter().apply {
-            addAction(Intent.ACTION_BATTERY_CHANGED)
+        val stateFilter = IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_ON)
             addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(Intent.ACTION_POWER_CONNECTED)
+            addAction(Intent.ACTION_POWER_DISCONNECTED)
             addAction(PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED)
             addAction(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED)
         }
         ContextCompat.registerReceiver(
             this,
-            systemEventsReceiver,
-            filter,
+            screenAndPowerReceiver,
+            stateFilter,
             ContextCompat.RECEIVER_EXPORTED
         )
+
+        syncBatteryReceiverRegistration(screenOn = isScreenInteractive, isCharging = initialSnap.isCharging)
+    }
+
+    /**
+     * Only keep ACTION_BATTERY_CHANGED registered when the screen is ON or the charger is plugged in.
+     * When the screen is OFF and unplugged, we unregister ACTION_BATTERY_CHANGED so the app uses 0.0% CPU during standby!
+     */
+    private fun syncBatteryReceiverRegistration(screenOn: Boolean, isCharging: Boolean) {
+        val shouldListen = screenOn || isCharging
+        if (shouldListen && !isBatteryReceiverRegistered) {
+            runCatching {
+                ContextCompat.registerReceiver(
+                    this,
+                    batteryBroadcastReceiver,
+                    IntentFilter(Intent.ACTION_BATTERY_CHANGED),
+                    ContextCompat.RECEIVER_EXPORTED
+                )
+                isBatteryReceiverRegistered = true
+            }
+        } else if (!shouldListen && isBatteryReceiverRegistered) {
+            runCatching {
+                unregisterReceiver(batteryBroadcastReceiver)
+                isBatteryReceiverRegistered = false
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
-        val snap = app.batteryRepository.updateFromIntent(null, latestSettings.designCapacityMah)
+        val snap = app.batteryRepository.updateFromIntent(null, latestSettings.designCapacityOverrideMah)
         promoteToForegroundSafely(snap)
         app.notificationHelper.updateOngoingNotification(snap, latestSettings, latestScreenStats)
         return START_STICKY
@@ -134,12 +182,16 @@ class BatteryMonitorService : LifecycleService() {
     }
 
     override fun onDestroy() {
-        runCatching { unregisterReceiver(systemEventsReceiver) }
+        runCatching { unregisterReceiver(screenAndPowerReceiver) }
+        if (isBatteryReceiverRegistered) {
+            runCatching { unregisterReceiver(batteryBroadcastReceiver) }
+            isBatteryReceiverRegistered = false
+        }
         super.onDestroy()
     }
 
     private fun handleBatteryBroadcast(intent: Intent) {
-        val snap = app.batteryRepository.updateFromIntent(intent, latestSettings.designCapacityMah)
+        val snap = app.batteryRepository.updateFromIntent(intent, latestSettings.designCapacityOverrideMah)
         val nowElapsed = SystemClock.elapsedRealtime()
         val nowUptime = SystemClock.uptimeMillis()
 
@@ -159,7 +211,7 @@ class BatteryMonitorService : LifecycleService() {
             } else {
                 0L
             }
-            if (deltaLevel > 0 || deltaElapsed >= 30_000L) {
+            if (deltaLevel > 0 || deltaElapsed >= 60_000L) {
                 val sliceScreenOn = isScreenInteractive
                 lifecycleScope.launch {
                     app.settingsRepository.recordScreenSlice(
@@ -184,6 +236,7 @@ class BatteryMonitorService : LifecycleService() {
             lastSliceElapsedMs = nowElapsed
             lastSliceUptimeMs = nowUptime
             wasChargingLastSlice = snap.isCharging
+            syncBatteryReceiverRegistration(screenOn = isScreenInteractive, isCharging = snap.isCharging)
         }
 
         lifecycleScope.launch {
@@ -201,7 +254,7 @@ class BatteryMonitorService : LifecycleService() {
     private fun handleScreenStateChange(screenOn: Boolean) {
         val nowElapsed = SystemClock.elapsedRealtime()
         val nowUptime = SystemClock.uptimeMillis()
-        val snap = app.batteryRepository.updateFromIntent(null, latestSettings.designCapacityMah)
+        val snap = app.batteryRepository.updateFromIntent(null, latestSettings.designCapacityOverrideMah)
 
         if (!snap.isCharging && !wasChargingLastSlice && lastSliceBatteryLevel in 0..100) {
             val deltaLevel = (lastSliceBatteryLevel - snap.levelPercent).coerceAtLeast(0)
@@ -223,12 +276,26 @@ class BatteryMonitorService : LifecycleService() {
         lastSliceUptimeMs = nowUptime
         lastSliceBatteryLevel = snap.levelPercent
         wasChargingLastSlice = snap.isCharging
+
+        // Unregister ACTION_BATTERY_CHANGED when screen turns off and unplugged so CPU sleeps undisturbed!
+        syncBatteryReceiverRegistration(screenOn = screenOn, isCharging = snap.isCharging)
+
+        if (screenOn) {
+            lifecycleScope.launch {
+                app.batteryRepository.recordTelemetryIfNeeded(
+                    snapshot = snap,
+                    sampleIntervalMinutes = latestSettings.sampleIntervalMinutes,
+                    retentionDays = latestSettings.retentionDays
+                )
+            }
+            evaluateThresholdsAndAlert(snap, latestSettings)
+            app.notificationHelper.updateOngoingNotification(snap, latestSettings, latestScreenStats)
+        }
     }
 
     private fun evaluateThresholdsAndAlert(snap: BatterySnapshot, settings: UserSettings) {
         val playSound = settings.alertSoundEnabled
 
-        // 1. Charge limit reached (default 80%)
         if (settings.alertChargeLimitEnabled && snap.isCharging && snap.levelPercent >= settings.alertChargeLimitPercent && snap.levelPercent < 100) {
             if (!firedChargeLimit) {
                 firedChargeLimit = true
@@ -243,7 +310,6 @@ class BatteryMonitorService : LifecycleService() {
             firedChargeLimit = false
         }
 
-        // 2. Fully charged (100%)
         if (settings.alertFullChargeEnabled && snap.isCharging && snap.levelPercent == 100) {
             if (!firedFullCharge) {
                 firedFullCharge = true
@@ -258,7 +324,6 @@ class BatteryMonitorService : LifecycleService() {
             firedFullCharge = false
         }
 
-        // 3. Low battery (default 20%)
         if (settings.alertLowBatteryEnabled && !snap.isCharging && snap.levelPercent <= settings.alertLowBatteryPercent && snap.levelPercent > settings.alertCriticalBatteryPercent) {
             if (!firedLowBattery) {
                 firedLowBattery = true
@@ -273,7 +338,6 @@ class BatteryMonitorService : LifecycleService() {
             firedLowBattery = false
         }
 
-        // 4. Critical battery (default 10%)
         if (settings.alertCriticalBatteryEnabled && !snap.isCharging && snap.levelPercent <= settings.alertCriticalBatteryPercent) {
             if (!firedCriticalBattery) {
                 firedCriticalBattery = true
@@ -288,7 +352,6 @@ class BatteryMonitorService : LifecycleService() {
             firedCriticalBattery = false
         }
 
-        // 5. High temperature (default 40°C)
         val tempC = snap.temperatureDeciC / 10f
         if (settings.alertHighTempEnabled && tempC >= settings.alertHighTempCelsius) {
             if (!firedHighTemp) {
@@ -309,7 +372,6 @@ class BatteryMonitorService : LifecycleService() {
             firedHighTemp = false
         }
 
-        // 6. Optional charging started/stopped alert
         val prevPlug = lastPluggedState
         if (prevPlug != null && prevPlug != snap.isCharging && settings.alertPlugStateChange) {
             val title = if (snap.isCharging) "[PLUG] CHARGING STARTED (${snap.plugType})" else "[PLUG] CHARGER DISCONNECTED"

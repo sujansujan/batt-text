@@ -3,6 +3,7 @@ package com.batttext.app
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -13,9 +14,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -23,19 +22,19 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import com.batttext.app.service.BatteryMonitorService
 import com.batttext.app.ui.MainViewModel
 import com.batttext.app.ui.components.TextDivider
@@ -46,21 +45,27 @@ import com.batttext.app.ui.screens.HistoryScreen
 import com.batttext.app.ui.screens.SessionsScreen
 import com.batttext.app.ui.screens.SettingsScreen
 import com.batttext.app.ui.theme.BattTextTheme
+import kotlinx.coroutines.delay
+import rikka.shizuku.Shizuku
 
 class MainActivity : ComponentActivity() {
 
     private val viewModel: MainViewModel by viewModels()
 
+    private val shizukuPermissionListener =
+        Shizuku.OnRequestPermissionResultListener { _, grantResult ->
+            if (grantResult == PackageManager.PERMISSION_GRANTED) {
+                viewModel.rescanHardwareWithShizuku()
+            }
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         val app = application as BattTextApp
+        runCatching { Shizuku.addRequestPermissionResultListener(shizukuPermissionListener) }
 
         setContent {
-            LaunchedEffect(Unit) {
-                BatteryMonitorService.startService(this@MainActivity)
-            }
-
             val settings by viewModel.settings.collectAsStateWithLifecycle()
             val snapshot by viewModel.snapshot.collectAsStateWithLifecycle()
             val screenStats by viewModel.screenStats.collectAsStateWithLifecycle()
@@ -68,7 +73,30 @@ class MainActivity : ComponentActivity() {
             val historyRange by viewModel.historyRange.collectAsStateWithLifecycle()
             val samples by viewModel.historySamples.collectAsStateWithLifecycle()
             val sessions by viewModel.recentSessions.collectAsStateWithLifecycle()
-            val clockText by viewModel.clockText.collectAsStateWithLifecycle()
+
+            val lifecycleOwner = LocalLifecycleOwner.current
+
+            // Start foreground service only if enabled in settings
+            LaunchedEffect(settings.backgroundMonitorEnabled) {
+                if (settings.backgroundMonitorEnabled) {
+                    BatteryMonitorService.startService(this@MainActivity)
+                }
+            }
+
+            // Refresh current reading ONLY while the Activity is actively RESUMED on screen (every 5s),
+            // using 0% CPU the instant you switch apps or turn off the screen!
+            LaunchedEffect(lifecycleOwner) {
+                lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                    // If Shizuku is running and not yet granted, prompt once automatically
+                    if (app.hardwareSpecReader.isShizukuRunning() && !app.hardwareSpecReader.isShizukuPermissionGranted()) {
+                        app.hardwareSpecReader.requestShizukuPermission()
+                    }
+                    while (true) {
+                        viewModel.refreshLiveSnapshot()
+                        delay(5000L)
+                    }
+                }
+            }
 
             var hasNotifPerm by remember {
                 mutableStateOf(app.notificationHelper.hasNotificationPermission())
@@ -77,11 +105,21 @@ class MainActivity : ComponentActivity() {
             var showDozeExplainModal by remember { mutableStateOf(false) }
             var lastCrashLog by remember { mutableStateOf(app.readLastCrashLog()) }
 
+            DisposableEffect(lifecycleOwner) {
+                val observer = LifecycleEventObserver { _, event ->
+                    if (event == Lifecycle.Event.ON_RESUME) {
+                        hasNotifPerm = app.notificationHelper.hasNotificationPermission()
+                    }
+                }
+                lifecycleOwner.lifecycle.addObserver(observer)
+                onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+            }
+
             val notifLauncher = rememberLauncherForActivityResult(
                 contract = ActivityResultContracts.RequestPermission()
             ) { granted ->
                 hasNotifPerm = granted
-                if (granted) {
+                if (granted && settings.backgroundMonitorEnabled) {
                     BatteryMonitorService.startService(this@MainActivity)
                 }
             }
@@ -98,18 +136,15 @@ class MainActivity : ComponentActivity() {
                 pureAscii = settings.pureAsciiBorders
             ) {
                 val colors = BattTextTheme.colors
-                val fontFamily = BattTextTheme.fontFamily
                 val scrollState = rememberScrollState()
 
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
                         .background(colors.background)
-                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                        .padding(horizontal = 10.dp, vertical = 4.dp)
                 ) {
-                    HeaderLine(clockText = clockText)
-                    TextDivider(doubleLine = true, color = colors.border)
-
+                    // Clean top navigation tabs (no app name, clock, or footer clutter)
                     TextTabBar(
                         tabs = listOf("DASH", "HISTORY", "SESSIONS", "SETTINGS"),
                         selectedIndex = selectedTab,
@@ -133,6 +168,7 @@ class MainActivity : ComponentActivity() {
                                 isIgnoringBatteryOptimizations = viewModel.isIgnoringBatteryOptimizations(),
                                 onRequestNotificationPermission = { showNotifExplainModal = true },
                                 onRequestBatteryOptExemption = { showDozeExplainModal = true },
+                                onRequestShizukuOrRescan = viewModel::rescanHardwareWithShizuku,
                                 onResetScreenStats = viewModel::resetScreenStats
                             )
                             1 -> HistoryScreen(
@@ -147,40 +183,22 @@ class MainActivity : ComponentActivity() {
                                 settings = settings
                             )
                             3 -> SettingsScreen(
+                                snapshot = snapshot,
                                 settings = settings,
                                 settingsRepository = viewModel.settingsRepository,
                                 hasNotificationPermission = hasNotifPerm,
                                 isIgnoringBatteryOptimizations = viewModel.isIgnoringBatteryOptimizations(),
+                                onToggleBackgroundMonitor = viewModel::toggleBackgroundMonitor,
                                 onCycleThemeMode = viewModel::cycleThemeMode,
                                 onCycleFontMode = viewModel::cycleFontMode,
                                 onCycleNotificationStyle = viewModel::cycleNotificationStyle,
                                 onRequestNotificationPermission = { showNotifExplainModal = true },
                                 onRequestBatteryOptExemption = { showDozeExplainModal = true },
+                                onRequestShizukuOrRescan = viewModel::rescanHardwareWithShizuku,
                                 onClearHistory = viewModel::clearAllHistory
                             )
                         }
-                        Spacer(modifier = Modifier.height(12.dp))
-                    }
-
-                    TextDivider(doubleLine = false, color = colors.border)
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 2.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            text = "FGS: ACTIVE (NO-WAKELOCK)",
-                            color = colors.muted,
-                            fontFamily = fontFamily,
-                            fontSize = 11.sp
-                        )
-                        Text(
-                            text = "FONT: ${settings.fontMode.name} | THEME: ${settings.themeMode.name}",
-                            color = colors.muted,
-                            fontFamily = fontFamily,
-                            fontSize = 11.sp
-                        )
+                        Spacer(modifier = Modifier.height(10.dp))
                     }
                 }
 
@@ -202,10 +220,7 @@ class MainActivity : ComponentActivity() {
                     TextModalDialog(
                         title = "POST_NOTIFICATIONS PERMISSION",
                         bodyLines = listOf(
-                            "BattText displays a silent, low-importance live telemetry line in your status bar:",
-                            "78% | Charging AC | +1850mA | 31.2C | 4.21V",
-                            "It also posts one-shot threshold alerts (charge limit, low battery, overheat).",
-                            "Allow notifications so the foreground monitor can display live stats?"
+                            "Allow notifications to show live battery stats, active/idle drain per hour, and doze status in your notification shade."
                         ),
                         confirmLabel = "ALLOW NOTIFICATIONS",
                         onConfirm = {
@@ -223,9 +238,8 @@ class MainActivity : ComponentActivity() {
                     TextModalDialog(
                         title = "BATTERY OPTIMIZATION EXEMPTION",
                         bodyLines = listOf(
-                            "Android cannot deliver sticky ACTION_BATTERY_CHANGED or ACTION_SCREEN_ON/OFF broadcasts to background services if the system kills the process during Doze.",
-                            "BattText uses ZERO wake locks and ZERO internet.",
-                            "Exempt BattText from battery optimization for uninterrupted session logging?"
+                            "Exempting BattText prevents HyperOS from killing the passive broadcast receiver.",
+                            "BattText unregisters battery listeners when your screen is off and unplugged, using 0% CPU during standby."
                         ),
                         confirmLabel = "OPEN EXEMPTION PROMPT",
                         onConfirm = {
@@ -238,6 +252,11 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onDestroy() {
+        runCatching { Shizuku.removeRequestPermissionResultListener(shizukuPermissionListener) }
+        super.onDestroy()
     }
 
     @SuppressLint("BatteryLife")
@@ -253,33 +272,5 @@ class MainActivity : ComponentActivity() {
                 startActivity(fallback)
             }
         }
-    }
-}
-
-@Composable
-private fun HeaderLine(clockText: String) {
-    val colors = BattTextTheme.colors
-    val fontFamily = BattTextTheme.fontFamily
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 2.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = "BATTTEXT",
-            color = colors.accent,
-            fontFamily = fontFamily,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Bold
-        )
-        Text(
-            text = clockText,
-            color = colors.foreground,
-            fontFamily = fontFamily,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Bold
-        )
     }
 }

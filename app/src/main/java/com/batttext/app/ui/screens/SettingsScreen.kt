@@ -16,6 +16,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.batttext.app.data.prefs.SettingsRepository
 import com.batttext.app.data.prefs.UserSettings
+import com.batttext.app.data.repository.BatterySnapshot
 import com.batttext.app.ui.components.TextButtonBracket
 import com.batttext.app.ui.components.TextDivider
 import com.batttext.app.ui.components.TextFramedBox
@@ -27,22 +28,88 @@ import kotlinx.coroutines.launch
 
 @Composable
 fun SettingsScreen(
+    snapshot: BatterySnapshot,
     settings: UserSettings,
     settingsRepository: SettingsRepository,
     hasNotificationPermission: Boolean,
     isIgnoringBatteryOptimizations: Boolean,
+    onToggleBackgroundMonitor: (Boolean) -> Unit,
     onCycleThemeMode: () -> Unit,
     onCycleFontMode: () -> Unit,
     onCycleNotificationStyle: () -> Unit,
     onRequestNotificationPermission: () -> Unit,
     onRequestBatteryOptExemption: () -> Unit,
+    onRequestShizukuOrRescan: () -> Unit,
     onClearHistory: () -> Unit
 ) {
     val colors = BattTextTheme.colors
     val scope = rememberCoroutineScope()
     var showClearConfirm by remember { mutableStateOf(false) }
 
+    val autoCap = snapshot.hardwareSpecs.autoDesignCapacityMah
+    val capDisplay = if (settings.designCapacityOverrideMah <= 0) {
+        "AUTO (${autoCap})"
+    } else {
+        "${settings.designCapacityOverrideMah}mAh"
+    }
+
     Column(modifier = Modifier.fillMaxWidth()) {
+        TextFramedBox(
+            title = "EFFICIENCY & BACKGROUND SERVICE",
+            rightHeaderTag = "ZERO-POLL"
+        ) {
+            TextToggleRow(
+                label = "BACKGROUND MONITOR & NOTIFICATION",
+                checked = settings.backgroundMonitorEnabled,
+                onToggle = onToggleBackgroundMonitor,
+                subtitle = "Event-driven only (0% CPU during screen-off standby)"
+            )
+            TextDivider()
+            TextToggleRow(
+                label = "START SERVICE ON BOOT",
+                checked = settings.startOnBoot,
+                onToggle = { scope.launch { settingsRepository.setStartOnBoot(it) } },
+                subtitle = "Restart monitor automatically after reboot"
+            )
+            TextDivider()
+            TextStepperRow(
+                label = "SAMPLE INTERVAL",
+                valueText = "${settings.sampleIntervalMinutes} MIN",
+                onDecrement = {
+                    scope.launch { settingsRepository.setSampleIntervalMinutes(settings.sampleIntervalMinutes - 1) }
+                },
+                onIncrement = {
+                    scope.launch { settingsRepository.setSampleIntervalMinutes(settings.sampleIntervalMinutes + 1) }
+                },
+                subtitle = "Minimum minutes between Room history samples"
+            )
+            TextDivider()
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(34.dp),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                TextButtonBracket(
+                    text = if (hasNotificationPermission) "NOTIF: GRANTED" else "GRANT NOTIF",
+                    onClick = onRequestNotificationPermission,
+                    color = if (hasNotificationPermission) colors.good else colors.warning
+                )
+                TextButtonBracket(
+                    text = if (isIgnoringBatteryOptimizations) "DOZE: EXEMPT" else "EXEMPT DOZE",
+                    onClick = onRequestBatteryOptExemption,
+                    color = if (isIgnoringBatteryOptimizations) colors.good else colors.warning
+                )
+                TextButtonBracket(
+                    text = if (snapshot.hardwareSpecs.shizukuGranted) "SHIZUKU: OK" else "SHIZUKU",
+                    onClick = onRequestShizukuOrRescan,
+                    color = if (snapshot.hardwareSpecs.shizukuGranted) colors.good else colors.link
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(6.dp))
+
         TextFramedBox(
             title = "DISPLAY & TYPOGRAPHY",
             rightHeaderTag = "DRACULA / ALUCARD"
@@ -180,32 +247,34 @@ fun SettingsScreen(
         Spacer(modifier = Modifier.height(6.dp))
 
         TextFramedBox(
-            title = "SERVICE & TELEMETRY",
-            rightHeaderTag = "API 34 FGS"
+            title = "CAPACITY & STORAGE",
+            rightHeaderTag = "AUTO / SHIZUKU"
         ) {
             TextStepperRow(
                 label = "DESIGN CAPACITY",
-                valueText = "${settings.designCapacityMah}mAh",
+                valueText = capDisplay,
                 onDecrement = {
-                    scope.launch { settingsRepository.setDesignCapacityMah(settings.designCapacityMah - 100) }
+                    val base = if (settings.designCapacityOverrideMah <= 0) autoCap else settings.designCapacityOverrideMah
+                    scope.launch { settingsRepository.setDesignCapacityOverrideMah(base - 100) }
                 },
                 onIncrement = {
-                    scope.launch { settingsRepository.setDesignCapacityMah(settings.designCapacityMah + 100) }
+                    val base = if (settings.designCapacityOverrideMah <= 0) autoCap else settings.designCapacityOverrideMah
+                    scope.launch { settingsRepository.setDesignCapacityOverrideMah(base + 100) }
                 },
-                subtitle = "Nominal factory battery capacity in mAh"
+                subtitle = "Auto-detected from hardware; tap [AUTO] below to reset"
             )
-            TextDivider()
-            TextStepperRow(
-                label = "SAMPLE INTERVAL",
-                valueText = "${settings.sampleIntervalMinutes} MIN",
-                onDecrement = {
-                    scope.launch { settingsRepository.setSampleIntervalMinutes(settings.sampleIntervalMinutes - 1) }
-                },
-                onIncrement = {
-                    scope.launch { settingsRepository.setSampleIntervalMinutes(settings.sampleIntervalMinutes + 1) }
-                },
-                subtitle = "How often Room records a history point"
-            )
+            if (settings.designCapacityOverrideMah > 0) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButtonBracket(
+                        text = "USE AUTO CAPACITY (${autoCap}mAh)",
+                        onClick = { scope.launch { settingsRepository.setDesignCapacityOverrideMah(0) } },
+                        color = colors.good
+                    )
+                }
+            }
             TextDivider()
             TextStepperRow(
                 label = "HISTORY RETENTION",
@@ -224,7 +293,7 @@ fun SettingsScreen(
                 valueText = settings.notificationStyle.name,
                 onDecrement = onCycleNotificationStyle,
                 onIncrement = onCycleNotificationStyle,
-                subtitle = "COMPACT vs DETAILED (includes capacity & screen drain)"
+                subtitle = "COMPACT vs DETAILED (includes capacity)"
             )
             TextDivider()
             TextToggleRow(
@@ -233,31 +302,6 @@ fun SettingsScreen(
                 onToggle = { scope.launch { settingsRepository.setDynamicPercentIcon(it) } },
                 subtitle = "Draw battery % as plain digits in status bar"
             )
-            TextDivider()
-            TextToggleRow(
-                label = "START SERVICE ON BOOT",
-                checked = settings.startOnBoot,
-                onToggle = { scope.launch { settingsRepository.setStartOnBoot(it) } },
-                subtitle = "Restart foreground monitor on BOOT_COMPLETED"
-            )
-            TextDivider()
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(34.dp),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                TextButtonBracket(
-                    text = if (hasNotificationPermission) "NOTIF: GRANTED" else "GRANT NOTIF PERM",
-                    onClick = onRequestNotificationPermission,
-                    color = if (hasNotificationPermission) colors.good else colors.warning
-                )
-                TextButtonBracket(
-                    text = if (isIgnoringBatteryOptimizations) "DOZE: EXEMPT" else "EXEMPT DOZE",
-                    onClick = onRequestBatteryOptExemption,
-                    color = if (isIgnoringBatteryOptimizations) colors.good else colors.warning
-                )
-            }
             TextDivider()
             Row(
                 modifier = Modifier.fillMaxWidth(),

@@ -4,9 +4,6 @@ import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
 
-/**
- * Periodic battery telemetry sample stored in Room for 24h / 7d text graphs.
- */
 @Entity(
     tableName = "battery_samples",
     indices = [Index(value = ["timestampMillis"])]
@@ -22,9 +19,6 @@ data class BatterySampleEntity(
     val isScreenOn: Boolean
 )
 
-/**
- * Completed or active charge/discharge session record.
- */
 @Entity(
     tableName = "battery_sessions",
     indices = [Index(value = ["startTimeMillis"])]

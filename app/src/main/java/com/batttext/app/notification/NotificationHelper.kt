@@ -71,6 +71,12 @@ class NotificationHelper(private val context: Context) {
         }
     }
 
+    /**
+     * Builds the silent ongoing notification with:
+     * - Title: `78% | CHG AC | +1850mA | 31.2C | 4.21V | 0h42m`
+     * - Subtitle (collapsed 2nd line): `ACT 8.4%/h | IDL 0.6%/h | DOZE: OFF`
+     * - Expanded BigTextStyle: Clean stats block with zero "BATTTEXT LIVE TELEMETRY" header filler.
+     */
     fun buildOngoingNotification(
         snapshot: BatterySnapshot,
         settings: UserSettings,
@@ -89,9 +95,9 @@ class NotificationHelper(private val context: Context) {
         )
 
         val statusSegment = if (snapshot.isCharging && snapshot.plugType != "NONE") {
-            "Charging ${snapshot.plugType}"
+            "CHG ${snapshot.plugType}"
         } else {
-            snapshot.statusText.lowercase().replaceFirstChar { it.uppercase() }
+            snapshot.statusText
         }
 
         val currentSign = if (snapshot.currentMa > 0) "+" else ""
@@ -102,42 +108,72 @@ class NotificationHelper(private val context: Context) {
         val etaSegment = snapshot.etaMinutes?.let { mins ->
             val h = mins / 60
             val m = mins % 60
-            if (snapshot.isCharging) "full in ${h}h${String.format(Locale.US, "%02d", m)}m"
-            else "empty in ${h}h${String.format(Locale.US, "%02d", m)}m"
+            if (snapshot.isCharging) "full ${h}h${String.format(Locale.US, "%02d", m)}m"
+            else "left ${h}h${String.format(Locale.US, "%02d", m)}m"
         } ?: String.format(Locale.US, "%.1f%%/h", snapshot.speedPercentPerHour)
 
-        val compactLine = "${snapshot.levelPercent}% | $statusSegment | $currentSegment | $tempSegment | $voltSegment | $etaSegment"
+        val titleLine = "${snapshot.levelPercent}% | $statusSegment | $currentSegment | $tempSegment | $voltSegment | $etaSegment"
+
+        val activeRateStr = screenStats.activeDrainRatePctPerHour?.let {
+            String.format(Locale.US, "%.1f%%/h", it)
+        } ?: if (!snapshot.isCharging && snapshot.isScreenOn && snapshot.speedPercentPerHour > 0f) {
+            String.format(Locale.US, "%.1f%%/h", snapshot.speedPercentPerHour)
+        } else "--%/h"
+
+        val idleRateStr = screenStats.idleDrainRatePctPerHour?.let {
+            String.format(Locale.US, "%.1f%%/h", it)
+        } ?: if (!snapshot.isCharging && !snapshot.isScreenOn && snapshot.speedPercentPerHour > 0f) {
+            String.format(Locale.US, "%.1f%%/h", snapshot.speedPercentPerHour)
+        } else "--%/h"
+
+        val dozeStatusStr = when {
+            snapshot.isDeviceIdleDoze -> "DEEP"
+            !snapshot.isScreenOn -> "LIGHT"
+            else -> "OFF"
+        }
+
+        val summaryLine = "ACT $activeRateStr | IDL $idleRateStr | DOZE: $dozeStatusStr"
 
         val bootDeepSleepPct = if (snapshot.bootElapsedRealtimeMs > 0L) {
             (snapshot.bootDeepSleepMs * 100f) / snapshot.bootElapsedRealtimeMs.toFloat()
         } else 0f
 
         val expandedBlock = buildString {
-            appendLine("BATTTEXT LIVE TELEMETRY")
-            appendLine("STATUS : ${snapshot.statusText} (${snapshot.plugType})")
-            appendLine("LEVEL  : ${snapshot.levelPercent}%  •  POWER: ${String.format(Locale.US, "%.2fW", snapshot.powerWatts)}")
-            appendLine("CURRENT: $currentSegment (AVG ${if (snapshot.avgCurrentMa > 0) "+" else ""}${snapshot.avgCurrentMa}mA)")
-            appendLine("TEMP/V : $tempSegment  •  $voltSegment  •  DEEP SLEEP: ${String.format(Locale.US, "%.1f%%", bootDeepSleepPct)}")
+            appendLine(summaryLine)
+            appendLine("CURRENT: $currentSegment (AVG ${if (snapshot.avgCurrentMa > 0) "+" else ""}${snapshot.avgCurrentMa}mA) • ${String.format(Locale.US, "%.2fW", snapshot.powerWatts)}")
+            appendLine("SLEEP  : ${String.format(Locale.US, "%.1f%%", bootDeepSleepPct)} DEEP SLEEP • DOZE: $dozeStatusStr")
             if (settings.notificationStyle == NotificationStyle.DETAILED) {
                 val capStr = snapshot.estimatedFullCapacityMah?.let { "${it}mAh" } ?: "N/A"
-                appendLine("CAP    : EST $capStr / DESIGN ${settings.designCapacityMah}mAh")
                 append(
                     String.format(
                         Locale.US,
-                        "DRAIN  : SCR ON %.1f%% | SCR OFF %.1f%%",
+                        "DRAIN  : ON %.1f%% (%s) | OFF %.1f%% (%s) | CAP %s/%dmAh",
                         screenStats.screenOnDrainPercent,
-                        screenStats.screenOffDrainPercent
+                        activeRateStr,
+                        screenStats.screenOffDrainPercent,
+                        idleRateStr,
+                        capStr,
+                        snapshot.effectiveDesignCapacityMah
                     )
                 )
             } else {
-                append("RATE   : ${String.format(Locale.US, "%.1f%%/hr", snapshot.speedPercentPerHour)}  •  ${etaSegment.uppercase()}")
+                append(
+                    String.format(
+                        Locale.US,
+                        "DRAIN  : ON %.1f%% (%s) | OFF %.1f%% (%s)",
+                        screenStats.screenOnDrainPercent,
+                        activeRateStr,
+                        screenStats.screenOffDrainPercent,
+                        idleRateStr
+                    )
+                )
             }
         }
 
         val builder = NotificationCompat.Builder(context, CHANNEL_MONITOR_ID)
             .setSmallIcon(R.drawable.ic_stat_battery)
-            .setContentTitle(compactLine)
-            .setContentText("Tap to open BattText scoreboard")
+            .setContentTitle(titleLine)
+            .setContentText(summaryLine)
             .setStyle(NotificationCompat.BigTextStyle().bigText(expandedBlock))
             .setOngoing(true)
             .setOnlyAlertOnce(true)

@@ -31,6 +31,7 @@ fun DashboardScreen(
     isIgnoringBatteryOptimizations: Boolean,
     onRequestNotificationPermission: () -> Unit,
     onRequestBatteryOptExemption: () -> Unit,
+    onRequestShizukuOrRescan: () -> Unit,
     onResetScreenStats: () -> Unit
 ) {
     val configuration = LocalConfiguration.current
@@ -55,10 +56,14 @@ fun DashboardScreen(
                 Column(modifier = Modifier.weight(1f)) {
                     LiveBatteryBox(snapshot = snapshot, settings = settings)
                     Spacer(modifier = Modifier.height(6.dp))
-                    CapacityBox(snapshot = snapshot, settings = settings)
+                    DeviceAndHardwareBox(
+                        snapshot = snapshot,
+                        settings = settings,
+                        onRequestShizukuOrRescan = onRequestShizukuOrRescan
+                    )
                 }
                 Column(modifier = Modifier.weight(1f)) {
-                    RateAndEtaBox(snapshot = snapshot)
+                    RateAndEtaBox(snapshot = snapshot, screenStats = screenStats)
                     Spacer(modifier = Modifier.height(6.dp))
                     DeepSleepAndDozeBox(
                         snapshot = snapshot,
@@ -72,7 +77,7 @@ fun DashboardScreen(
         } else {
             LiveBatteryBox(snapshot = snapshot, settings = settings)
             Spacer(modifier = Modifier.height(6.dp))
-            RateAndEtaBox(snapshot = snapshot)
+            RateAndEtaBox(snapshot = snapshot, screenStats = screenStats)
             Spacer(modifier = Modifier.height(6.dp))
             DeepSleepAndDozeBox(
                 snapshot = snapshot,
@@ -82,7 +87,11 @@ fun DashboardScreen(
                 onResetScreenStats = onResetScreenStats
             )
             Spacer(modifier = Modifier.height(6.dp))
-            CapacityBox(snapshot = snapshot, settings = settings)
+            DeviceAndHardwareBox(
+                snapshot = snapshot,
+                settings = settings,
+                onRequestShizukuOrRescan = onRequestShizukuOrRescan
+            )
         }
     }
 }
@@ -144,8 +153,9 @@ private fun LiveBatteryBox(
         else -> colors.good
     }
 
+    val fastChargeTag = snapshot.hardwareSpecs.fastChargeType?.let { " [$it]" } ?: ""
     val statusFormatted = if (snapshot.plugType != "NONE") {
-        "${snapshot.statusText} (${snapshot.plugType})"
+        "${snapshot.statusText} (${snapshot.plugType})$fastChargeTag"
     } else {
         snapshot.statusText
     }
@@ -227,7 +237,10 @@ private fun LiveBatteryBox(
 }
 
 @Composable
-private fun RateAndEtaBox(snapshot: BatterySnapshot) {
+private fun RateAndEtaBox(
+    snapshot: BatterySnapshot,
+    screenStats: ScreenDrainStats
+) {
     val colors = BattTextTheme.colors
     val etaLabel = if (snapshot.isCharging) "FULL IN" else "EMPTY IN"
     val etaValue = snapshot.etaMinutes?.let { mins ->
@@ -243,8 +256,20 @@ private fun RateAndEtaBox(snapshot: BatterySnapshot) {
         "0.0 %/hr"
     }
 
+    val activeRate = screenStats.activeDrainRatePctPerHour?.let {
+        String.format(Locale.US, "%.1f %%/hr", it)
+    } ?: if (!snapshot.isCharging && snapshot.isScreenOn && snapshot.speedPercentPerHour > 0f) {
+        String.format(Locale.US, "%.1f %%/hr (LIVE)", snapshot.speedPercentPerHour)
+    } else "-- %/hr"
+
+    val idleRate = screenStats.idleDrainRatePctPerHour?.let {
+        String.format(Locale.US, "%.1f %%/hr", it)
+    } ?: if (!snapshot.isCharging && !snapshot.isScreenOn && snapshot.speedPercentPerHour > 0f) {
+        String.format(Locale.US, "%.1f %%/hr (LIVE)", snapshot.speedPercentPerHour)
+    } else "-- %/hr"
+
     TextFramedBox(
-        title = "SPEED & ESTIMATE",
+        title = "CONSUMPTION & ESTIMATE",
         rightHeaderTag = if (snapshot.isScreenOn) "SCR:ON" else "SCR:OFF"
     ) {
         TextKeyValueRow(
@@ -253,17 +278,23 @@ private fun RateAndEtaBox(snapshot: BatterySnapshot) {
             valueColor = colors.accent
         )
         TextKeyValueRow(
-            label = "SPEED",
+            label = "LIVE SPEED",
             value = rateStr,
             valueColor = if (snapshot.isCharging) colors.good else colors.foreground
+        )
+        TextKeyValueRow(
+            label = "ACTIVE / HR",
+            value = activeRate,
+            valueColor = colors.warning
+        )
+        TextKeyValueRow(
+            label = "IDLE / HR",
+            value = idleRate,
+            valueColor = colors.good
         )
     }
 }
 
-/**
- * Combined Screen On/Off Drain + Deep Sleep & Doze Accounting Box (like BatteryGuru).
- * Shows both system-wide Deep Sleep since boot and tracked Screen-Off Deep Sleep vs Awake (Wakelock) ratio.
- */
 @Composable
 private fun DeepSleepAndDozeBox(
     snapshot: BatterySnapshot,
@@ -274,12 +305,10 @@ private fun DeepSleepAndDozeBox(
 ) {
     val colors = BattTextTheme.colors
 
-    // 1. System-wide Deep Sleep since boot (works immediately on app launch!)
     val bootTotalMs = snapshot.bootElapsedRealtimeMs.coerceAtLeast(1L)
     val bootDeepPct = (snapshot.bootDeepSleepMs * 100f) / bootTotalMs.toFloat()
     val bootAwakePct = (snapshot.bootAwakeUptimeMs * 100f) / bootTotalMs.toFloat()
 
-    // 2. Tracked Screen-Off Deep Sleep vs Awake Idle (Wakelock)
     val trackedOffTotalMs = (screenStats.deepSleepDurationMs + screenStats.awakeIdleDurationMs)
     val trackedDeepPct = if (trackedOffTotalMs > 0L) {
         (screenStats.deepSleepDurationMs * 100f) / trackedOffTotalMs.toFloat()
@@ -288,24 +317,22 @@ private fun DeepSleepAndDozeBox(
         (screenStats.awakeIdleDurationMs * 100f) / trackedOffTotalMs.toFloat()
     } else 0f
 
-    val onHours = screenStats.screenOnDurationMs / 3_600_000f
-    val offHours = screenStats.screenOffDurationMs / 3_600_000f
-    val onRate = if (onHours >= 0.05f) String.format(Locale.US, "%.1f %%/h", screenStats.screenOnDrainPercent / onHours) else "-- %/h"
-    val offRate = if (offHours >= 0.05f) String.format(Locale.US, "%.1f %%/h", screenStats.screenOffDrainPercent / offHours) else "-- %/h"
+    val onRate = screenStats.activeDrainRatePctPerHour?.let { String.format(Locale.US, "%.1f %%/h", it) } ?: "-- %/h"
+    val offRate = screenStats.idleDrainRatePctPerHour?.let { String.format(Locale.US, "%.1f %%/h", it) } ?: "-- %/h"
 
     val dozeStateStr = when {
-        snapshot.isDeviceIdleDoze -> "DOZING (IDLE)"
+        snapshot.isDeviceIdleDoze -> "DEEP DOZE (IDLE)"
         !snapshot.isScreenOn -> "LIGHT IDLE (SCR OFF)"
-        else -> "ACTIVE (SCR ON)"
+        else -> "OFF (SCREEN ON)"
     }
-    val saverTag = if (snapshot.isPowerSaveMode) "SAVER:ON" else "DOZE & SLEEP"
+    val saverTag = if (snapshot.isPowerSaveMode) "SAVER:ON" else "ZERO-POLL"
 
     TextFramedBox(
         title = "DEEP SLEEP, DOZE & DRAIN",
         rightHeaderTag = saverTag
     ) {
         TextKeyValueRow(
-            label = "DOZE STATE",
+            label = "DOZE STATUS",
             value = dozeStateStr,
             valueColor = if (snapshot.isDeviceIdleDoze) colors.good else colors.foreground,
             trailingContent = if (!isIgnoringBatteryOptimizations) {
@@ -397,36 +424,88 @@ private fun DeepSleepAndDozeBox(
     }
 }
 
+/**
+ * Auto-detected Device & Battery Hardware Box with Shizuku integration.
+ */
 @Composable
-private fun CapacityBox(
+private fun DeviceAndHardwareBox(
     snapshot: BatterySnapshot,
-    settings: UserSettings
+    settings: UserSettings,
+    onRequestShizukuOrRescan: () -> Unit
 ) {
     val colors = BattTextTheme.colors
+    val hw = snapshot.hardwareSpecs
+    val designMah = snapshot.effectiveDesignCapacityMah
+
     val counterStr = snapshot.chargeCounterMah?.let { "$it mAh" } ?: "N/A"
     val estCapStr = snapshot.estimatedFullCapacityMah?.let { est ->
-        val healthPct = ((est.toFloat() / settings.designCapacityMah.toFloat()) * 100f).toInt()
-        "$est mAh ($healthPct% OF DESIGN)"
-    } ?: "N/A (NEEDS >=15% & COUNTER)"
+        val healthPct = ((est.toFloat() / designMah.toFloat()) * 100f).toInt()
+        "$est mAh ($healthPct% OF $designMah mAh)"
+    } ?: "N/A"
+
+    val capSourceStr = if (settings.designCapacityOverrideMah > 0) {
+        "$designMah mAh (MANUAL OVERRIDE)"
+    } else {
+        "$designMah mAh (AUTO: ${hw.capacitySource})"
+    }
+
+    val shizukuStatusStr = when {
+        hw.shizukuGranted -> "GRANTED (KERNEL SYSFS ACTIVE)"
+        hw.shizukuRunning -> "RUNNING (TAP TO GRANT)"
+        else -> "NOT RUNNING (USING SYSFS/PROFILE)"
+    }
+    val shizukuBtnLabel = when {
+        hw.shizukuGranted -> "RESCAN"
+        hw.shizukuRunning -> "GRANT SHIZUKU"
+        else -> "RESCAN"
+    }
 
     TextFramedBox(
-        title = "CAPACITY",
-        rightHeaderTag = "DESIGN ${settings.designCapacityMah}mAh"
+        title = "DEVICE & HARDWARE SPECS",
+        rightHeaderTag = hw.deviceCodename
     ) {
+        TextKeyValueRow(
+            label = "DEVICE",
+            value = hw.deviceModel,
+            valueColor = colors.foreground
+        )
+        TextKeyValueRow(
+            label = "SOC / CHIP",
+            value = "${hw.socName} | ${hw.androidRelease}",
+            valueColor = colors.muted
+        )
+        TextDivider()
+        TextKeyValueRow(
+            label = "DESIGN CAP",
+            value = capSourceStr,
+            valueColor = colors.good
+        )
+        TextKeyValueRow(
+            label = "LEARNED CAP",
+            value = estCapStr,
+            valueColor = colors.accent
+        )
         TextKeyValueRow(
             label = "CHG COUNTER",
             value = counterStr,
             valueColor = colors.foreground
         )
         TextKeyValueRow(
-            label = "EST FULL CAP",
-            value = estCapStr,
-            valueColor = colors.accent
+            label = "CYCLE COUNT",
+            value = hw.cycleCount?.let { "$it CYCLES" } ?: "N/A (GRANT SHIZUKU IF SUPPORTED)",
+            valueColor = if (hw.cycleCount != null) colors.good else colors.muted
         )
         TextKeyValueRow(
-            label = "DESIGN CAP",
-            value = "${settings.designCapacityMah} mAh (EDIT IN SETTINGS)",
-            valueColor = colors.muted
+            label = "SHIZUKU",
+            value = shizukuStatusStr,
+            valueColor = if (hw.shizukuGranted) colors.good else colors.warning,
+            trailingContent = {
+                TextButtonBracket(
+                    text = shizukuBtnLabel,
+                    onClick = onRequestShizukuOrRescan,
+                    color = colors.link
+                )
+            }
         )
     }
 }

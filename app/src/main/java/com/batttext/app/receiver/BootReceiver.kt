@@ -21,7 +21,7 @@ class BootReceiver : BroadcastReceiver() {
             try {
                 val app = context.applicationContext as BattTextApp
                 val settings = app.settingsRepository.settingsFlow.first()
-                if (settings.startOnBoot) {
+                if (settings.startOnBoot && settings.backgroundMonitorEnabled) {
                     BatteryMonitorService.startService(context)
                 }
             } catch (_: Throwable) {

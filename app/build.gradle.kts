@@ -12,8 +12,8 @@ android {
         applicationId = "com.batttext.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 2
-        versionName = "1.1.0"
+        versionCode = 3
+        versionName = "1.2.0"
 
         vectorDrawables {
             useSupportLibrary = true
@@ -29,10 +29,8 @@ android {
             versionNameSuffix = "-DEBUG"
         }
         release {
-            // Disabled destructive R8 class shrinking for personal builds so Compose/Room/DataStore never get stripped
             isMinifyEnabled = false
             isShrinkResources = false
-            // Signed with default debug key so the release APK installs directly for personal use
             signingConfig = signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -67,8 +65,6 @@ android {
 }
 
 dependencies {
-    // Compose BOM 2024.09.00 includes Compose Foundation 1.7.0+ with the updated IndicationNodeFactory API,
-    // fixing the crash with Material3 RippleNode when providing a custom NoIndication
     val composeBom = platform("androidx.compose:compose-bom:2024.09.00")
     implementation(composeBom)
 
@@ -95,4 +91,9 @@ dependencies {
 
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+
+    // Shizuku API & Provider for hardware sysfs / dumpsys battery inspection
+    val shizukuVersion = "13.1.5"
+    implementation("dev.rikka.shizuku:api:$shizukuVersion")
+    implementation("dev.rikka.shizuku:provider:$shizukuVersion")
 }
