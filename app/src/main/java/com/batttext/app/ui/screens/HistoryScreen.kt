@@ -36,7 +36,6 @@ fun HistoryScreen(
 ) {
     val colors = BattTextTheme.colors
 
-    // Ensure the graph always has at least the live snapshot if Room has just started collecting
     val effectiveSamples = remember(samples, liveSnapshot) {
         if (samples.isNotEmpty()) samples
         else listOf(
@@ -98,7 +97,6 @@ fun HistoryScreen(
 
         Spacer(modifier = Modifier.height(6.dp))
 
-        // 1. Battery Level % Block Graph
         val minLvl = effectiveSamples.minOfOrNull { it.levelPercent } ?: 0
         val maxLvl = effectiveSamples.maxOfOrNull { it.levelPercent } ?: 100
         TextFramedBox(
@@ -120,7 +118,6 @@ fun HistoryScreen(
 
         Spacer(modifier = Modifier.height(6.dp))
 
-        // 2. Temperature Block Graph
         val tempUnit = if (settings.useFahrenheit) "F" else "C"
         val minTemp = tempBuckets.minOrNull() ?: if (settings.useFahrenheit) 68f else 20f
         val maxTemp = tempBuckets.maxOrNull() ?: if (settings.useFahrenheit) 115f else 45f
@@ -146,7 +143,6 @@ fun HistoryScreen(
 
         Spacer(modifier = Modifier.height(6.dp))
 
-        // 3. Recent Telemetry Log Table
         val sdf = remember { SimpleDateFormat("MM/dd HH:mm", Locale.US) }
         val tableRows = remember(effectiveSamples, settings.useFahrenheit) {
             effectiveSamples.takeLast(15).reversed().map { s ->

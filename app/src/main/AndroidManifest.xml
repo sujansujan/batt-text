@@ -39,7 +39,7 @@
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Continuous real-time battery telemetry monitoring, sticky ACTION_BATTERY_CHANGED broadcast reception, screen on/off drain accounting, and user-configured battery threshold alerts." />
+                android:value="Continuous real-time battery telemetry monitoring, sticky ACTION_BATTERY_CHANGED broadcast reception, screen on/off &amp; deep sleep accounting, and user-configured battery threshold alerts." />
         </service>
 
         <receiver

@@ -16,11 +16,14 @@
   - Live power (`W`), voltage (`V` / `mV`), temperature (`°C` / `°F`), health, and chemistry.
   - Charge / discharge speed (`%/hr`) and rolling-average **Time to Full / Time to Empty** (`0h 42m`).
   - Hardware `CHARGE_COUNTER` (`mAh`) and estimated full capacity vs configurable design capacity.
-- **History, Sessions & Screen Drain**:
+- **Deep Sleep, Doze & Screen Drain Accounting**:
+  - Live **Doze State** (`DOZING (IDLE)` vs `LIGHT IDLE (SCR OFF)` vs `ACTIVE (SCR ON)`) and Power Saver status.
+  - System-wide **Boot Deep Sleep %** and **Boot Awake %** (`SystemClock.elapsedRealtime() - SystemClock.uptimeMillis()`).
+  - Tracked **Screen-On vs Screen-Off Drain** (`%` and `%/hr`) plus **Screen-Off Deep Sleep vs Wakelock Awake Idle** breakdown.
+- **History & Sessions**:
   - Configurable periodic sampling (`1–60 min`) to **Room** with automatic old-data pruning.
   - `24H` and `7D` block-character graphs (`▁▂▃▄▅▆▇█`) for Battery `%` and Temperature.
   - Automatic charge and discharge session tracking (`start/end time`, `start->end %`, `avg mA`, `peak temp`).
-  - Screen-on vs Screen-off discharge `%` and `%/hr` accounting (`ACTION_SCREEN_ON` / `ACTION_SCREEN_OFF`).
 - **Text-Only Notifications & Threshold Alerts**:
   - API 34 `specialUse` foreground service with zero wake locks and zero background polling.
   - Persistent silent ongoing notification (`78% | Charging AC | +1850mA | 31.2C | 4.21V | full in 0h42m`) with `BigTextStyle` expanded telemetry block.
@@ -30,33 +33,17 @@
 ## Screenshots Placeholder
 
 ```text
-BATTTEXT         14:32:07
-═════════════════════════════════════════════
+BATTTEXT                                14:32:07
+════════════════════════════════════════════════
 [*DASH*]   HISTORY   SESSIONS   SETTINGS
-─────────────────────────────────────────────
-┌─ BATTERY ───────────────────────── LI-ION ─┐
-│ LEVEL        78%  [█████████▌░░]           │
-│ STATUS       CHARGING (AC)                 │
-│ CURRENT      +1850 mA  (AVG +1820 mA)      │
-│ POWER        7.79 W                        │
-│ VOLTAGE      4.210 V (4210 mV)             │
-│ TEMP         31.2 C                        │
-│ HEALTH       GOOD                          │
-└────────────────────────────────────────────┘
-```
-
-*(Add device screenshots under `docs/screenshots/` after building.)*
-
-## How to Generate `gradlew` and Build Locally
-
-Because binary JAR files (`gradle-wrapper.jar`) cannot be embedded in plain text, generate the wrapper once (or let the GitHub Actions workflow generate it automatically via `gradle/actions/setup-gradle@v3`):
-
-```bash
-# 1. Generate gradlew and gradle/wrapper/gradle-wrapper.jar (if Gradle is installed locally)
-gradle wrapper --gradle-version 8.5
-chmod +x gradlew
-
-# 2. Build the Debug APK
-./gradlew assembleDebug
-# Output: app/build/outputs/apk/debug/app-debug.apk
+────────────────────────────────────────────────
+┌─ BATTERY ──────────────────────────── LI-ION ─┐
+│ LEVEL        78%  [█████████▌░░]              │
+│ STATUS       CHARGING (AC)                    │
+│ CURRENT      +1850 mA  (AVG +1820 mA)         │
+│ POWER        7.79 W                           │
+│ VOLTAGE      4.210 V (4210 mV)                │
+│ TEMP         31.2 C                           │
+│ HEALTH       GOOD                             │
+└───────────────────────────────────────────────┘
 ```

@@ -32,7 +32,6 @@ fun SessionsScreen(
     val dischargeSessions = remember(sessions) { sessions.filter { !it.isCharging } }
 
     Column(modifier = Modifier.fillMaxWidth()) {
-        // Summary box
         TextFramedBox(
             title = "SESSION SUMMARY",
             rightHeaderTag = "TOTAL ${sessions.size}"
@@ -65,7 +64,6 @@ fun SessionsScreen(
 
         Spacer(modifier = Modifier.height(6.dp))
 
-        // Sessions table
         val rows = remember(sessions, settings.useFahrenheit) {
             sessions.map { s ->
                 val typeStr = if (s.isCharging) {

@@ -4,13 +4,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -23,60 +20,22 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.batttext.app.ui.theme.BattTextTheme
 import kotlin.math.floor
-import kotlin.math.max
 import kotlin.math.roundToInt
 
 /**
- * Measures the exact pixel width of a border glyph under the active font (FontFamily.Default or Monospace)
- * and calculates how many characters fit on a single line without wrapping.
- */
-@Composable
-private fun rememberCharCountForWidth(
-    maxWidthDp: Dp,
-    sampleChar: Char,
-    fontSize: TextUnit = 13.sp
-): Int {
-    val measurer = rememberTextMeasurer()
-    val fontFamily = BattTextTheme.fontFamily
-    val density = LocalDensity.current
-    val safeWidthDp = if (maxWidthDp.value.isFinite() && maxWidthDp.value > 0f && maxWidthDp.value < 10_000f) {
-        maxWidthDp
-    } else {
-        360.dp
-    }
-    val maxWidthPx = with(density) { safeWidthDp.toPx() }
-
-    return remember(maxWidthPx, sampleChar, fontFamily, fontSize) {
-        runCatching {
-            val sample = sampleChar.toString().repeat(20)
-            val measured = measurer.measure(
-                text = AnnotatedString(sample),
-                style = TextStyle(fontFamily = fontFamily, fontSize = fontSize)
-            ).size.width.toFloat()
-            val singleCharPx = (measured / 20f).coerceAtLeast(4f)
-            floor(maxWidthPx / singleCharPx).toInt().coerceIn(16, 300)
-        }.getOrDefault(48)
-    }
-}
-
-/**
- * Full-width horizontal text rule made of repeated `─` or `═` (or `-` / `=` in pure ASCII mode),
- * measured dynamically so it never wraps onto a second line even under proportional system fonts.
+ * Full-width horizontal text rule made of repeated `─` or `═` (or `-` / `=` in pure ASCII mode).
+ * Uses `maxLines = 1, softWrap = false, overflow = TextOverflow.Clip` so it fills the exact
+ * available width under any font (System or Monospace) without needing SubcomposeLayout.
  */
 @Composable
 fun TextDivider(
@@ -86,29 +45,25 @@ fun TextDivider(
 ) {
     val charset = BattTextTheme.charset
     val ch = if (doubleLine) charset.doubleHorizontal else charset.horizontal
-    BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
-        val count = rememberCharCountForWidth(maxWidth, ch, 13.sp)
-        val lineStr = remember(count, ch) { ch.toString().repeat(count) }
-        Text(
-            text = lineStr,
-            color = color,
-            fontFamily = BattTextTheme.fontFamily,
-            fontSize = 13.sp,
-            maxLines = 1,
-            softWrap = false,
-            overflow = TextOverflow.Clip
-        )
-    }
+    val lineStr = remember(ch) { ch.toString().repeat(220) }
+    Text(
+        text = lineStr,
+        color = color,
+        fontFamily = BattTextTheme.fontFamily,
+        fontSize = 13.sp,
+        maxLines = 1,
+        softWrap = false,
+        overflow = TextOverflow.Clip,
+        modifier = modifier.fillMaxWidth()
+    )
 }
 
 /**
  * Plain-text framed section box inspired by plaintextsports.com.
  *
- * Crucial alignment guarantee for proportional system fonts (`FontFamily.Default`):
- * Instead of relying on equal glyph widths to line up the right border, the top and bottom
- * border lines (`┌─ TITLE ───┐` and `└───────────┘`) are measured to the exact container width,
- * while the left and right vertical rails are rendered as fixed-width character columns flanking
- * a structured Compose layout. This keeps the box 100% aligned on every Android system font!
+ * Uses `drawBehind` on the middle content container to draw the left and right vertical border
+ * rails, avoiding `IntrinsicSize.Min` and `BoxWithConstraints` so it is 100% immune to nested
+ * scroll or intrinsic measurement crashes while staying pixel-aligned on proportional system fonts.
  */
 @Composable
 fun TextFramedBox(
@@ -121,144 +76,130 @@ fun TextFramedBox(
 ) {
     val charset = BattTextTheme.charset
     val fontFamily = BattTextTheme.fontFamily
+    val repeatedRule = remember(charset.horizontal) { charset.horizontal.toString().repeat(220) }
 
-    BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
-        val totalDashCount = rememberCharCountForWidth(maxWidth, charset.horizontal, 13.sp)
-
-        Column(modifier = Modifier.fillMaxWidth()) {
-            // Top border row: ┌─ TITLE ─────────────── [TAG] ─┐
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+    Column(modifier = modifier.fillMaxWidth()) {
+        // Top border row: ┌─ TITLE ─────────────── [TAG] ─┐
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "${charset.topLeft}${charset.horizontal} ",
+                color = borderColor,
+                fontFamily = fontFamily,
+                fontSize = 13.sp,
+                maxLines = 1,
+                softWrap = false
+            )
+            Text(
+                text = title.uppercase(),
+                color = titleColor,
+                fontFamily = fontFamily,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                softWrap = false
+            )
+            Text(
+                text = " $repeatedRule",
+                color = borderColor,
+                fontFamily = fontFamily,
+                fontSize = 13.sp,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Clip,
+                modifier = Modifier.weight(1f)
+            )
+            if (!rightHeaderTag.isNullOrBlank()) {
                 Text(
-                    text = "${charset.topLeft}${charset.horizontal} ",
-                    color = borderColor,
+                    text = " $rightHeaderTag ",
+                    color = BattTextTheme.colors.muted,
                     fontFamily = fontFamily,
-                    fontSize = 13.sp,
-                    softWrap = false
-                )
-                Text(
-                    text = title.uppercase(),
-                    color = titleColor,
-                    fontFamily = fontFamily,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold,
-                    softWrap = false
-                )
-                Text(
-                    text = " " + charset.horizontal.toString().repeat(totalDashCount),
-                    color = borderColor,
-                    fontFamily = fontFamily,
-                    fontSize = 13.sp,
+                    fontSize = 12.sp,
                     maxLines = 1,
-                    softWrap = false,
-                    overflow = TextOverflow.Clip,
-                    modifier = Modifier.weight(1f)
+                    softWrap = false
                 )
-                if (!rightHeaderTag.isNullOrBlank()) {
-                    Text(
-                        text = " $rightHeaderTag ",
-                        color = BattTextTheme.colors.muted,
-                        fontFamily = fontFamily,
-                        fontSize = 12.sp,
-                        softWrap = false
+            }
+            Text(
+                text = "${charset.horizontal}${charset.topRight}",
+                color = borderColor,
+                fontFamily = fontFamily,
+                fontSize = 13.sp,
+                maxLines = 1,
+                softWrap = false
+            )
+        }
+
+        // Middle content with left & right vertical rails drawn directly on the Column canvas
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .drawBehind {
+                    val strokePx = 1.5.dp.toPx()
+                    val leftX = 4.dp.toPx()
+                    val rightX = size.width - 4.dp.toPx()
+                    drawLine(
+                        color = borderColor,
+                        start = Offset(leftX, 0f),
+                        end = Offset(leftX, size.height),
+                        strokeWidth = strokePx
+                    )
+                    drawLine(
+                        color = borderColor,
+                        start = Offset(rightX, 0f),
+                        end = Offset(rightX, size.height),
+                        strokeWidth = strokePx
                     )
                 }
-                Text(
-                    text = "${charset.horizontal}${charset.topRight}",
-                    color = borderColor,
-                    fontFamily = fontFamily,
-                    fontSize = 13.sp,
-                    softWrap = false
-                )
-            }
+                .padding(horizontal = 12.dp, vertical = 4.dp),
+            content = content
+        )
 
-            // Middle content flanked by crisp vertical rails matching the exact character centres
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(IntrinsicSize.Min)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .width(12.dp)
-                        .fillMaxHeight()
-                        .drawBehind {
-                            drawLine(
-                                color = borderColor,
-                                start = Offset(size.width * 0.35f, 0f),
-                                end = Offset(size.width * 0.35f, size.height),
-                                strokeWidth = 1.5.dp.toPx()
-                            )
-                        }
-                )
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(vertical = 4.dp, horizontal = 2.dp),
-                    content = content
-                )
-                Box(
-                    modifier = Modifier
-                        .width(12.dp)
-                        .fillMaxHeight()
-                        .drawBehind {
-                            drawLine(
-                                color = borderColor,
-                                start = Offset(size.width * 0.65f, 0f),
-                                end = Offset(size.width * 0.65f, size.height),
-                                strokeWidth = 1.5.dp.toPx()
-                            )
-                        }
-                )
-            }
-
-            // Bottom border row: └──────────────────────────────┘
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = charset.bottomLeft.toString(),
-                    color = borderColor,
-                    fontFamily = fontFamily,
-                    fontSize = 13.sp,
-                    softWrap = false
-                )
-                Text(
-                    text = charset.horizontal.toString().repeat(totalDashCount),
-                    color = borderColor,
-                    fontFamily = fontFamily,
-                    fontSize = 13.sp,
-                    maxLines = 1,
-                    softWrap = false,
-                    overflow = TextOverflow.Clip,
-                    modifier = Modifier.weight(1f)
-                )
-                Text(
-                    text = charset.bottomRight.toString(),
-                    color = borderColor,
-                    fontFamily = fontFamily,
-                    fontSize = 13.sp,
-                    softWrap = false
-                )
-            }
+        // Bottom border row: └──────────────────────────────┘
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = charset.bottomLeft.toString(),
+                color = borderColor,
+                fontFamily = fontFamily,
+                fontSize = 13.sp,
+                maxLines = 1,
+                softWrap = false
+            )
+            Text(
+                text = repeatedRule,
+                color = borderColor,
+                fontFamily = fontFamily,
+                fontSize = 13.sp,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Clip,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                text = charset.bottomRight.toString(),
+                color = borderColor,
+                fontFamily = fontFamily,
+                fontSize = 13.sp,
+                maxLines = 1,
+                softWrap = false
+            )
         }
     }
 }
 
 /**
  * Aligned label/value row inside a framed box.
- * Uses a fixed dp width for the uppercase label column so values stay strictly left-aligned
- * whether the user selects System (proportional) or Monospace font.
  */
 @Composable
 fun TextKeyValueRow(
     label: String,
     value: String,
     modifier: Modifier = Modifier,
-    labelWidth: Dp = 104.dp,
+    labelWidth: Dp = 108.dp,
     valueColor: Color = BattTextTheme.colors.foreground,
     trailingContent: (@Composable () -> Unit)? = null
 ) {
@@ -545,7 +486,6 @@ fun TextTable(
     val fontFamily = BattTextTheme.fontFamily
 
     Column(modifier = Modifier.fillMaxWidth()) {
-        // Header row
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -608,8 +548,7 @@ fun TextTable(
 }
 
 /**
- * Multi-row plain-text block graph that stays column-aligned under any font family
- * by laying out each X-axis bucket in an equal-weight Compose column cell.
+ * Multi-row plain-text block graph that stays column-aligned under any font family.
  */
 @Composable
 fun TextBlockGraph(

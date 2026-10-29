@@ -1,9 +1,8 @@
 package com.batttext.app.ui.theme
 
 import android.app.Activity
+import androidx.compose.foundation.IndicationNodeFactory
 import androidx.compose.foundation.LocalIndication
-import androidx.compose.foundation.Indication
-import androidx.compose.foundation.IndicationInstance
 import androidx.compose.foundation.interaction.InteractionSource
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
@@ -15,9 +14,12 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.node.DelegatableNode
+import androidx.compose.ui.node.DrawModifierNode
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.core.view.WindowCompat
@@ -144,15 +146,19 @@ val AsciiCharset = BorderCharset(
 )
 
 /**
- * Zero-ripple indication so taps feel instantaneous like a plain-text terminal scoreboard.
+ * Compose 1.7+ compliant IndicationNodeFactory that draws zero ripples.
+ * Fixes the IllegalArgumentException crash when overriding LocalIndication inside MaterialTheme.
  */
-private object NoIndication : Indication, IndicationInstance {
-    @Composable
-    override fun rememberUpdatedInstance(interactionSource: InteractionSource): IndicationInstance = this
-
-    override fun ContentDrawScope.drawIndication() {
-        drawContent()
+object NoIndicationNodeFactory : IndicationNodeFactory {
+    private class NoIndicationNode : Modifier.Node(), DrawModifierNode {
+        override fun ContentDrawScope.draw() {
+            drawContent()
+        }
     }
+
+    override fun create(interactionSource: InteractionSource): DelegatableNode = NoIndicationNode()
+    override fun hashCode(): Int = -1
+    override fun equals(other: Any?): Boolean = other === this
 }
 
 val LocalBattTextColors = staticCompositionLocalOf { DraculaPalette }
@@ -200,13 +206,15 @@ fun BattTextTheme(
     val view = LocalView.current
     if (!view.isInEditMode) {
         SideEffect {
-            val window = (view.context as? Activity)?.window ?: return@SideEffect
-            val bgArgb = palette.background.toArgb()
-            window.statusBarColor = bgArgb
-            window.navigationBarColor = bgArgb
-            val insetsController = WindowCompat.getInsetsController(window, view)
-            insetsController.isAppearanceLightStatusBars = !useDark
-            insetsController.isAppearanceLightNavigationBars = !useDark
+            runCatching {
+                val window = (view.context as? Activity)?.window ?: return@SideEffect
+                val bgArgb = palette.background.toArgb()
+                window.statusBarColor = bgArgb
+                window.navigationBarColor = bgArgb
+                val insetsController = WindowCompat.getInsetsController(window, view)
+                insetsController.isAppearanceLightStatusBars = !useDark
+                insetsController.isAppearanceLightNavigationBars = !useDark
+            }
         }
     }
 
@@ -233,7 +241,7 @@ fun BattTextTheme(
             LocalBattTextColors provides palette,
             LocalBattTextFont provides fontFamily,
             LocalBattTextCharset provides charset,
-            LocalIndication provides NoIndication,
+            LocalIndication provides NoIndicationNodeFactory,
             content = content
         )
     }

@@ -43,7 +43,6 @@ fun SettingsScreen(
     var showClearConfirm by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxWidth()) {
-        // 1. Appearance & Display
         TextFramedBox(
             title = "DISPLAY & TYPOGRAPHY",
             rightHeaderTag = "DRACULA / ALUCARD"
@@ -81,7 +80,6 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(6.dp))
 
-        // 2. Alert Thresholds
         TextFramedBox(
             title = "ALERT THRESHOLDS",
             rightHeaderTag = "ONE-SHOT EVENTS"
@@ -181,7 +179,6 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(6.dp))
 
-        // 3. Telemetry, Capacity & Service
         TextFramedBox(
             title = "SERVICE & TELEMETRY",
             rightHeaderTag = "API 34 FGS"

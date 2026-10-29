@@ -7,6 +7,7 @@ import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.PowerManager
+import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
@@ -22,8 +23,7 @@ import java.util.Locale
 
 /**
  * Lightweight, event-driven foreground service.
- * Uses zero wake locks and zero high-frequency background polling: updates occur strictly when
- * the system dispatches ACTION_BATTERY_CHANGED or ACTION_SCREEN_ON / ACTION_SCREEN_OFF.
+ * Tracks live battery broadcasts, screen on/off drain, and Deep Sleep vs Awake (Wakelock) idle time.
  */
 class BatteryMonitorService : LifecycleService() {
 
@@ -33,9 +33,10 @@ class BatteryMonitorService : LifecycleService() {
     private var latestSettings = UserSettings()
     private var latestScreenStats = ScreenDrainStats()
 
-    // State trackers for screen-on/off drain accounting
+    // State trackers for screen-on/off drain and Deep Sleep vs Awake Idle accounting
     private var isScreenInteractive: Boolean = true
-    private var lastSliceTimestampMs: Long = System.currentTimeMillis()
+    private var lastSliceElapsedMs: Long = SystemClock.elapsedRealtime()
+    private var lastSliceUptimeMs: Long = SystemClock.uptimeMillis()
     private var lastSliceBatteryLevel: Int = -1
     private var wasChargingLastSlice: Boolean = false
 
@@ -53,6 +54,11 @@ class BatteryMonitorService : LifecycleService() {
                 Intent.ACTION_BATTERY_CHANGED -> handleBatteryBroadcast(intent)
                 Intent.ACTION_SCREEN_ON -> handleScreenStateChange(screenOn = true)
                 Intent.ACTION_SCREEN_OFF -> handleScreenStateChange(screenOn = false)
+                PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED,
+                PowerManager.ACTION_POWER_SAVE_MODE_CHANGED -> {
+                    val snap = app.batteryRepository.updateFromIntent(null, latestSettings.designCapacityMah)
+                    app.notificationHelper.updateOngoingNotification(snap, latestSettings, latestScreenStats)
+                }
             }
         }
     }
@@ -60,8 +66,9 @@ class BatteryMonitorService : LifecycleService() {
     override fun onCreate() {
         super.onCreate()
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-        isScreenInteractive = pm.isInteractive
-        lastSliceTimestampMs = System.currentTimeMillis()
+        isScreenInteractive = runCatching { pm.isInteractive }.getOrDefault(true)
+        lastSliceElapsedMs = SystemClock.elapsedRealtime()
+        lastSliceUptimeMs = SystemClock.uptimeMillis()
 
         val initialSnap = app.batteryRepository.updateFromIntent(null, latestSettings.designCapacityMah)
         lastSliceBatteryLevel = initialSnap.levelPercent
@@ -70,7 +77,6 @@ class BatteryMonitorService : LifecycleService() {
 
         promoteToForegroundSafely(initialSnap)
 
-        // Observe settings & screen stats changes so notification formatting updates immediately
         lifecycleScope.launch {
             combine(
                 app.settingsRepository.settingsFlow,
@@ -89,8 +95,9 @@ class BatteryMonitorService : LifecycleService() {
             addAction(Intent.ACTION_BATTERY_CHANGED)
             addAction(Intent.ACTION_SCREEN_ON)
             addAction(Intent.ACTION_SCREEN_OFF)
+            addAction(PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED)
+            addAction(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED)
         }
-        // System broadcasts on Android 14+ / Xiaomi HyperOS require RECEIVER_EXPORTED
         ContextCompat.registerReceiver(
             this,
             systemEventsReceiver,
@@ -133,43 +140,52 @@ class BatteryMonitorService : LifecycleService() {
 
     private fun handleBatteryBroadcast(intent: Intent) {
         val snap = app.batteryRepository.updateFromIntent(intent, latestSettings.designCapacityMah)
-        val now = System.currentTimeMillis()
+        val nowElapsed = SystemClock.elapsedRealtime()
+        val nowUptime = SystemClock.uptimeMillis()
 
-        // Account for screen-on/off discharge since the last broadcast
         if (lastSliceBatteryLevel in 0..100) {
             val deltaLevel = if (!snap.isCharging && !wasChargingLastSlice) {
                 (lastSliceBatteryLevel - snap.levelPercent).coerceAtLeast(0)
             } else {
                 0
             }
-            val deltaTime = if (!snap.isCharging && !wasChargingLastSlice) {
-                (now - lastSliceTimestampMs).coerceAtLeast(0L)
+            val deltaElapsed = if (!snap.isCharging && !wasChargingLastSlice) {
+                (nowElapsed - lastSliceElapsedMs).coerceAtLeast(0L)
             } else {
                 0L
             }
-            if (deltaLevel > 0 || deltaTime >= 30_000L) {
+            val deltaUptime = if (!snap.isCharging && !wasChargingLastSlice) {
+                (nowUptime - lastSliceUptimeMs).coerceAtLeast(0L)
+            } else {
+                0L
+            }
+            if (deltaLevel > 0 || deltaElapsed >= 30_000L) {
+                val sliceScreenOn = isScreenInteractive
                 lifecycleScope.launch {
                     app.settingsRepository.recordScreenSlice(
-                        isScreenOn = isScreenInteractive,
+                        isScreenOn = sliceScreenOn,
                         deltaPercent = deltaLevel,
-                        deltaDurationMs = deltaTime
+                        deltaElapsedMs = deltaElapsed,
+                        deltaUptimeMs = deltaUptime
                     )
                 }
-                lastSliceTimestampMs = now
+                lastSliceElapsedMs = nowElapsed
+                lastSliceUptimeMs = nowUptime
                 lastSliceBatteryLevel = snap.levelPercent
             }
         } else {
             lastSliceBatteryLevel = snap.levelPercent
-            lastSliceTimestampMs = now
+            lastSliceElapsedMs = nowElapsed
+            lastSliceUptimeMs = nowUptime
         }
 
         if (wasChargingLastSlice != snap.isCharging) {
             lastSliceBatteryLevel = snap.levelPercent
-            lastSliceTimestampMs = now
+            lastSliceElapsedMs = nowElapsed
+            lastSliceUptimeMs = nowUptime
             wasChargingLastSlice = snap.isCharging
         }
 
-        // Persist periodic history sample & update active session
         lifecycleScope.launch {
             app.batteryRepository.recordTelemetryIfNeeded(
                 snapshot = snap,
@@ -183,23 +199,28 @@ class BatteryMonitorService : LifecycleService() {
     }
 
     private fun handleScreenStateChange(screenOn: Boolean) {
-        val now = System.currentTimeMillis()
+        val nowElapsed = SystemClock.elapsedRealtime()
+        val nowUptime = SystemClock.uptimeMillis()
         val snap = app.batteryRepository.updateFromIntent(null, latestSettings.designCapacityMah)
 
         if (!snap.isCharging && !wasChargingLastSlice && lastSliceBatteryLevel in 0..100) {
             val deltaLevel = (lastSliceBatteryLevel - snap.levelPercent).coerceAtLeast(0)
-            val deltaTime = (now - lastSliceTimestampMs).coerceAtLeast(0L)
+            val deltaElapsed = (nowElapsed - lastSliceElapsedMs).coerceAtLeast(0L)
+            val deltaUptime = (nowUptime - lastSliceUptimeMs).coerceAtLeast(0L)
+            val prevScreenOn = isScreenInteractive
             lifecycleScope.launch {
                 app.settingsRepository.recordScreenSlice(
-                    isScreenOn = isScreenInteractive,
+                    isScreenOn = prevScreenOn,
                     deltaPercent = deltaLevel,
-                    deltaDurationMs = deltaTime
+                    deltaElapsedMs = deltaElapsed,
+                    deltaUptimeMs = deltaUptime
                 )
             }
         }
 
         isScreenInteractive = screenOn
-        lastSliceTimestampMs = now
+        lastSliceElapsedMs = nowElapsed
+        lastSliceUptimeMs = nowUptime
         lastSliceBatteryLevel = snap.levelPercent
         wasChargingLastSlice = snap.isCharging
     }

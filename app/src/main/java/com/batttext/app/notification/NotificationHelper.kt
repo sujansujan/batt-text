@@ -32,7 +32,6 @@ class NotificationHelper(private val context: Context) {
     private val notificationManager =
         context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
-    // Cache dynamically rendered text-percentage status bar icons (0..100) so we never allocate bitmaps repeatedly
     private val iconCache = object : LruCache<Int, IconCompat>(16) {}
 
     fun createChannels() {
@@ -72,17 +71,11 @@ class NotificationHelper(private val context: Context) {
         }
     }
 
-    /**
-     * Builds the silent, plain-text ongoing telemetry notification.
-     * Example single-line: `78% | Charging AC | +1850mA | 31.2C | 4.21V | full in 0h42m`
-     * Expanded view uses BigTextStyle with a clean multi-line plain-text block.
-     */
     fun buildOngoingNotification(
         snapshot: BatterySnapshot,
         settings: UserSettings,
         screenStats: ScreenDrainStats
     ): Notification {
-        // Ensure channels exist before building notification (prevents race condition if service starts early)
         createChannels()
 
         val openIntent = Intent(context, MainActivity::class.java).apply {
@@ -115,12 +108,16 @@ class NotificationHelper(private val context: Context) {
 
         val compactLine = "${snapshot.levelPercent}% | $statusSegment | $currentSegment | $tempSegment | $voltSegment | $etaSegment"
 
+        val bootDeepSleepPct = if (snapshot.bootElapsedRealtimeMs > 0L) {
+            (snapshot.bootDeepSleepMs * 100f) / snapshot.bootElapsedRealtimeMs.toFloat()
+        } else 0f
+
         val expandedBlock = buildString {
             appendLine("BATTTEXT LIVE TELEMETRY")
             appendLine("STATUS : ${snapshot.statusText} (${snapshot.plugType})")
             appendLine("LEVEL  : ${snapshot.levelPercent}%  •  POWER: ${String.format(Locale.US, "%.2fW", snapshot.powerWatts)}")
             appendLine("CURRENT: $currentSegment (AVG ${if (snapshot.avgCurrentMa > 0) "+" else ""}${snapshot.avgCurrentMa}mA)")
-            appendLine("TEMP/V : $tempSegment  •  $voltSegment  •  HEALTH: ${snapshot.healthText}")
+            appendLine("TEMP/V : $tempSegment  •  $voltSegment  •  DEEP SLEEP: ${String.format(Locale.US, "%.1f%%", bootDeepSleepPct)}")
             if (settings.notificationStyle == NotificationStyle.DETAILED) {
                 val capStr = snapshot.estimatedFullCapacityMah?.let { "${it}mAh" } ?: "N/A"
                 appendLine("CAP    : EST $capStr / DESIGN ${settings.designCapacityMah}mAh")
@@ -138,7 +135,7 @@ class NotificationHelper(private val context: Context) {
         }
 
         val builder = NotificationCompat.Builder(context, CHANNEL_MONITOR_ID)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setSmallIcon(R.drawable.ic_stat_battery)
             .setContentTitle(compactLine)
             .setContentText("Tap to open BattText scoreboard")
             .setStyle(NotificationCompat.BigTextStyle().bigText(expandedBlock))
@@ -171,9 +168,6 @@ class NotificationHelper(private val context: Context) {
         }
     }
 
-    /**
-     * Fires a one-shot threshold alert with a plain-text body and a DISMISS action.
-     */
     fun sendAlertNotification(
         alertId: Int,
         title: String,
@@ -204,7 +198,7 @@ class NotificationHelper(private val context: Context) {
             )
 
             val builder = NotificationCompat.Builder(context, CHANNEL_ALERTS_ID)
-                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setSmallIcon(R.drawable.ic_stat_battery)
                 .setContentTitle(title)
                 .setContentText(body)
                 .setStyle(NotificationCompat.BigTextStyle().bigText(body))
@@ -225,10 +219,6 @@ class NotificationHelper(private val context: Context) {
         }
     }
 
-    /**
-     * Draws the battery percentage (0..100) as crisp plain-text digits onto a 64x64 alpha bitmap
-     * so even the status bar icon looks like pure text.
-     */
     private fun getOrCreatePercentageIcon(percent: Int): IconCompat {
         val clamped = percent.coerceIn(0, 100)
         iconCache.get(clamped)?.let { return it }
@@ -249,7 +239,6 @@ class NotificationHelper(private val context: Context) {
             }
         }
 
-        // Draw subtle top/bottom horizontal bars to frame the digits like a terminal readout
         val barPaint = Paint().apply {
             color = Color.WHITE
             strokeWidth = 3f

@@ -24,6 +24,7 @@ class BootReceiver : BroadcastReceiver() {
                 if (settings.startOnBoot) {
                     BatteryMonitorService.startService(context)
                 }
+            } catch (_: Throwable) {
             } finally {
                 pendingResult.finish()
             }

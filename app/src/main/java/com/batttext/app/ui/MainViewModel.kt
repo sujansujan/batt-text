@@ -68,7 +68,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     init {
-        // Light 2-second UI ticker ONLY while ViewModel is alive and UI is visible
         viewModelScope.launch {
             while (isActive) {
                 _clockText.value = formatCurrentClock()
@@ -87,8 +86,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun isIgnoringBatteryOptimizations(): Boolean {
-        val pm = app.getSystemService(Context.POWER_SERVICE) as PowerManager
-        return pm.isIgnoringBatteryOptimizations(app.packageName)
+        return runCatching {
+            val pm = app.getSystemService(Context.POWER_SERVICE) as PowerManager
+            pm.isIgnoringBatteryOptimizations(app.packageName)
+        }.getOrDefault(true)
     }
 
     fun resetScreenStats() {

@@ -54,10 +54,13 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        val app = application as BattTextApp
+
         setContent {
             LaunchedEffect(Unit) {
                 BatteryMonitorService.startService(this@MainActivity)
             }
+
             val settings by viewModel.settings.collectAsStateWithLifecycle()
             val snapshot by viewModel.snapshot.collectAsStateWithLifecycle()
             val screenStats by viewModel.screenStats.collectAsStateWithLifecycle()
@@ -68,10 +71,11 @@ class MainActivity : ComponentActivity() {
             val clockText by viewModel.clockText.collectAsStateWithLifecycle()
 
             var hasNotifPerm by remember {
-                mutableStateOf((application as BattTextApp).notificationHelper.hasNotificationPermission())
+                mutableStateOf(app.notificationHelper.hasNotificationPermission())
             }
             var showNotifExplainModal by remember { mutableStateOf(false) }
             var showDozeExplainModal by remember { mutableStateOf(false) }
+            var lastCrashLog by remember { mutableStateOf(app.readLastCrashLog()) }
 
             val notifLauncher = rememberLauncherForActivityResult(
                 contract = ActivityResultContracts.RequestPermission()
@@ -82,7 +86,6 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            // Prompt notification explanation once on Android 13+ if not yet granted
             LaunchedEffect(Unit) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasNotifPerm) {
                     showNotifExplainModal = true
@@ -104,11 +107,9 @@ class MainActivity : ComponentActivity() {
                         .background(colors.background)
                         .padding(horizontal = 10.dp, vertical = 6.dp)
                 ) {
-                    // Top header scoreboard bar: BATTTEXT                 14:32:07
                     HeaderLine(clockText = clockText)
                     TextDivider(doubleLine = true, color = colors.border)
 
-                    // Navigation tabs: DASH | HISTORY | SESSIONS | SETTINGS
                     TextTabBar(
                         tabs = listOf("DASH", "HISTORY", "SESSIONS", "SETTINGS"),
                         selectedIndex = selectedTab,
@@ -117,7 +118,6 @@ class MainActivity : ComponentActivity() {
                     TextDivider(doubleLine = false, color = colors.border)
                     Spacer(modifier = Modifier.height(6.dp))
 
-                    // Active screen body
                     Column(
                         modifier = Modifier
                             .weight(1f)
@@ -162,7 +162,6 @@ class MainActivity : ComponentActivity() {
                         Spacer(modifier = Modifier.height(12.dp))
                     }
 
-                    // Bottom status strip
                     TextDivider(doubleLine = false, color = colors.border)
                     Row(
                         modifier = Modifier
@@ -183,6 +182,20 @@ class MainActivity : ComponentActivity() {
                             fontSize = 11.sp
                         )
                     }
+                }
+
+                if (lastCrashLog != null) {
+                    TextModalDialog(
+                        title = "PREVIOUS CRASH LOG",
+                        bodyLines = lastCrashLog!!.lines().take(12),
+                        confirmLabel = "CLEAR LOG",
+                        onConfirm = {
+                            app.clearCrashLog()
+                            lastCrashLog = null
+                        },
+                        dismissLabel = "CLOSE",
+                        onDismiss = { lastCrashLog = null }
+                    )
                 }
 
                 if (showNotifExplainModal) {
@@ -235,8 +248,10 @@ class MainActivity : ComponentActivity() {
             }
             startActivity(intent)
         }.onFailure {
-            val fallback = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-            startActivity(fallback)
+            runCatching {
+                val fallback = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                startActivity(fallback)
+            }
         }
     }
 }

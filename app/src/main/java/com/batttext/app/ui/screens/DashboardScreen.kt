@@ -15,6 +15,7 @@ import com.batttext.app.data.prefs.ScreenDrainStats
 import com.batttext.app.data.prefs.UserSettings
 import com.batttext.app.data.repository.BatterySnapshot
 import com.batttext.app.ui.components.TextButtonBracket
+import com.batttext.app.ui.components.TextDivider
 import com.batttext.app.ui.components.TextFramedBox
 import com.batttext.app.ui.components.TextKeyValueRow
 import com.batttext.app.ui.components.TextProgressBar
@@ -36,7 +37,6 @@ fun DashboardScreen(
     val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
 
     Column(modifier = Modifier.fillMaxWidth()) {
-        // Plain-text permission / optimization banners if needed
         if (!hasNotificationPermission || !isIgnoringBatteryOptimizations) {
             SystemStatusBanner(
                 hasNotificationPermission = hasNotificationPermission,
@@ -60,9 +60,12 @@ fun DashboardScreen(
                 Column(modifier = Modifier.weight(1f)) {
                     RateAndEtaBox(snapshot = snapshot)
                     Spacer(modifier = Modifier.height(6.dp))
-                    ScreenDrainBox(
+                    DeepSleepAndDozeBox(
+                        snapshot = snapshot,
                         screenStats = screenStats,
-                        onReset = onResetScreenStats
+                        isIgnoringBatteryOptimizations = isIgnoringBatteryOptimizations,
+                        onRequestBatteryOptExemption = onRequestBatteryOptExemption,
+                        onResetScreenStats = onResetScreenStats
                     )
                 }
             }
@@ -71,12 +74,15 @@ fun DashboardScreen(
             Spacer(modifier = Modifier.height(6.dp))
             RateAndEtaBox(snapshot = snapshot)
             Spacer(modifier = Modifier.height(6.dp))
-            CapacityBox(snapshot = snapshot, settings = settings)
-            Spacer(modifier = Modifier.height(6.dp))
-            ScreenDrainBox(
+            DeepSleepAndDozeBox(
+                snapshot = snapshot,
                 screenStats = screenStats,
-                onReset = onResetScreenStats
+                isIgnoringBatteryOptimizations = isIgnoringBatteryOptimizations,
+                onRequestBatteryOptExemption = onRequestBatteryOptExemption,
+                onResetScreenStats = onResetScreenStats
             )
+            Spacer(modifier = Modifier.height(6.dp))
+            CapacityBox(snapshot = snapshot, settings = settings)
         }
     }
 }
@@ -254,6 +260,143 @@ private fun RateAndEtaBox(snapshot: BatterySnapshot) {
     }
 }
 
+/**
+ * Combined Screen On/Off Drain + Deep Sleep & Doze Accounting Box (like BatteryGuru).
+ * Shows both system-wide Deep Sleep since boot and tracked Screen-Off Deep Sleep vs Awake (Wakelock) ratio.
+ */
+@Composable
+private fun DeepSleepAndDozeBox(
+    snapshot: BatterySnapshot,
+    screenStats: ScreenDrainStats,
+    isIgnoringBatteryOptimizations: Boolean,
+    onRequestBatteryOptExemption: () -> Unit,
+    onResetScreenStats: () -> Unit
+) {
+    val colors = BattTextTheme.colors
+
+    // 1. System-wide Deep Sleep since boot (works immediately on app launch!)
+    val bootTotalMs = snapshot.bootElapsedRealtimeMs.coerceAtLeast(1L)
+    val bootDeepPct = (snapshot.bootDeepSleepMs * 100f) / bootTotalMs.toFloat()
+    val bootAwakePct = (snapshot.bootAwakeUptimeMs * 100f) / bootTotalMs.toFloat()
+
+    // 2. Tracked Screen-Off Deep Sleep vs Awake Idle (Wakelock)
+    val trackedOffTotalMs = (screenStats.deepSleepDurationMs + screenStats.awakeIdleDurationMs)
+    val trackedDeepPct = if (trackedOffTotalMs > 0L) {
+        (screenStats.deepSleepDurationMs * 100f) / trackedOffTotalMs.toFloat()
+    } else 0f
+    val trackedAwakePct = if (trackedOffTotalMs > 0L) {
+        (screenStats.awakeIdleDurationMs * 100f) / trackedOffTotalMs.toFloat()
+    } else 0f
+
+    val onHours = screenStats.screenOnDurationMs / 3_600_000f
+    val offHours = screenStats.screenOffDurationMs / 3_600_000f
+    val onRate = if (onHours >= 0.05f) String.format(Locale.US, "%.1f %%/h", screenStats.screenOnDrainPercent / onHours) else "-- %/h"
+    val offRate = if (offHours >= 0.05f) String.format(Locale.US, "%.1f %%/h", screenStats.screenOffDrainPercent / offHours) else "-- %/h"
+
+    val dozeStateStr = when {
+        snapshot.isDeviceIdleDoze -> "DOZING (IDLE)"
+        !snapshot.isScreenOn -> "LIGHT IDLE (SCR OFF)"
+        else -> "ACTIVE (SCR ON)"
+    }
+    val saverTag = if (snapshot.isPowerSaveMode) "SAVER:ON" else "DOZE & SLEEP"
+
+    TextFramedBox(
+        title = "DEEP SLEEP, DOZE & DRAIN",
+        rightHeaderTag = saverTag
+    ) {
+        TextKeyValueRow(
+            label = "DOZE STATE",
+            value = dozeStateStr,
+            valueColor = if (snapshot.isDeviceIdleDoze) colors.good else colors.foreground,
+            trailingContent = if (!isIgnoringBatteryOptimizations) {
+                {
+                    TextButtonBracket(
+                        text = "WHITELIST",
+                        onClick = onRequestBatteryOptExemption,
+                        color = colors.link
+                    )
+                }
+            } else null
+        )
+        TextKeyValueRow(
+            label = "BOOT SLEEP",
+            value = String.format(
+                Locale.US,
+                "%.1f%% (%s)",
+                bootDeepPct,
+                formatDurationShort(snapshot.bootDeepSleepMs)
+            ),
+            valueColor = colors.good,
+            trailingContent = {
+                TextProgressBar(
+                    fraction = bootDeepPct / 100f,
+                    segments = 10,
+                    fillColor = colors.good
+                )
+            }
+        )
+        TextKeyValueRow(
+            label = "BOOT AWAKE",
+            value = String.format(
+                Locale.US,
+                "%.1f%% (%s) | UP %s",
+                bootAwakePct,
+                formatDurationShort(snapshot.bootAwakeUptimeMs),
+                formatDurationShort(snapshot.bootElapsedRealtimeMs)
+            ),
+            valueColor = colors.foreground
+        )
+
+        TextDivider()
+
+        TextKeyValueRow(
+            label = "SCREEN ON",
+            value = String.format(
+                Locale.US,
+                "%.1f%%  (%s | %s)",
+                screenStats.screenOnDrainPercent,
+                formatDurationShort(screenStats.screenOnDurationMs),
+                onRate
+            ),
+            valueColor = colors.warning
+        )
+        TextKeyValueRow(
+            label = "SCREEN OFF",
+            value = String.format(
+                Locale.US,
+                "%.1f%%  (%s | %s)",
+                screenStats.screenOffDrainPercent,
+                formatDurationShort(screenStats.screenOffDurationMs),
+                offRate
+            ),
+            valueColor = colors.good
+        )
+        TextKeyValueRow(
+            label = "OFF SLEEP",
+            value = if (trackedOffTotalMs > 0L) {
+                String.format(
+                    Locale.US,
+                    "%.1f%% (%s) | WAKELOCK %.1f%% (%s)",
+                    trackedDeepPct,
+                    formatDurationShort(screenStats.deepSleepDurationMs),
+                    trackedAwakePct,
+                    formatDurationShort(screenStats.awakeIdleDurationMs)
+                )
+            } else {
+                "WAITING FOR SCREEN-OFF STANDBY..."
+            },
+            valueColor = colors.accent,
+            trailingContent = {
+                TextButtonBracket(
+                    text = "RESET",
+                    onClick = onResetScreenStats,
+                    color = colors.link
+                )
+            }
+        )
+    }
+}
+
 @Composable
 private fun CapacityBox(
     snapshot: BatterySnapshot,
@@ -284,62 +427,6 @@ private fun CapacityBox(
             label = "DESIGN CAP",
             value = "${settings.designCapacityMah} mAh (EDIT IN SETTINGS)",
             valueColor = colors.muted
-        )
-    }
-}
-
-@Composable
-private fun ScreenDrainBox(
-    screenStats: ScreenDrainStats,
-    onReset: () -> Unit
-) {
-    val colors = BattTextTheme.colors
-    val onHours = screenStats.screenOnDurationMs / 3_600_000f
-    val offHours = screenStats.screenOffDurationMs / 3_600_000f
-
-    val onRate = if (onHours >= 0.05f) {
-        String.format(Locale.US, "%.1f %%/h", screenStats.screenOnDrainPercent / onHours)
-    } else {
-        "-- %/h"
-    }
-    val offRate = if (offHours >= 0.05f) {
-        String.format(Locale.US, "%.1f %%/h", screenStats.screenOffDrainPercent / offHours)
-    } else {
-        "-- %/h"
-    }
-
-    TextFramedBox(
-        title = "SCREEN ON/OFF DRAIN",
-        rightHeaderTag = "DISCHARGE ONLY"
-    ) {
-        TextKeyValueRow(
-            label = "SCREEN ON",
-            value = String.format(
-                Locale.US,
-                "%.1f%%  (%s | %s)",
-                screenStats.screenOnDrainPercent,
-                formatDurationShort(screenStats.screenOnDurationMs),
-                onRate
-            ),
-            valueColor = colors.warning
-        )
-        TextKeyValueRow(
-            label = "SCREEN OFF",
-            value = String.format(
-                Locale.US,
-                "%.1f%%  (%s | %s)",
-                screenStats.screenOffDrainPercent,
-                formatDurationShort(screenStats.screenOffDurationMs),
-                offRate
-            ),
-            valueColor = colors.good,
-            trailingContent = {
-                TextButtonBracket(
-                    text = "RESET",
-                    onClick = onReset,
-                    color = colors.link
-                )
-            }
         )
     }
 }

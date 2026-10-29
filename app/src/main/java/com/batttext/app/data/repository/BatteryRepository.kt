@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
 import android.os.PowerManager
+import android.os.SystemClock
 import com.batttext.app.data.db.BatteryDao
 import com.batttext.app.data.db.BatterySampleEntity
 import com.batttext.app.data.db.BatterySessionEntity
@@ -17,7 +18,7 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /**
- * Normalized snapshot of live battery hardware properties.
+ * Normalized snapshot of live battery hardware properties, including Deep Sleep and Doze state.
  */
 data class BatterySnapshot(
     val timestampMillis: Long = System.currentTimeMillis(),
@@ -37,7 +38,12 @@ data class BatterySnapshot(
     val speedPercentPerHour: Float = 0f,
     val etaMinutes: Int? = null,
     val powerWatts: Float = 0f,
-    val isScreenOn: Boolean = true
+    val isScreenOn: Boolean = true,
+    val isDeviceIdleDoze: Boolean = false,
+    val isPowerSaveMode: Boolean = false,
+    val bootElapsedRealtimeMs: Long = 0L,
+    val bootDeepSleepMs: Long = 0L,
+    val bootAwakeUptimeMs: Long = 0L
 )
 
 class BatteryRepository(
@@ -59,17 +65,20 @@ class BatteryRepository(
     private var sessionRunningSumMa: Long = 0L
 
     init {
-        // Seed initial state from sticky broadcast immediately so UI is never blank
-        val sticky = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-        updateFromIntent(sticky, designCapMah = 4500)
+        runCatching {
+            val sticky = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+            updateFromIntent(sticky, designCapMah = 4500)
+        }
     }
 
     /**
-     * Reads both the ACTION_BATTERY_CHANGED intent extras and BatteryManager real-time properties,
-     * normalizing vendor quirks (µA vs mA, inverted signs, missing charge counters, 0 readings).
+     * Reads both the ACTION_BATTERY_CHANGED intent extras, BatteryManager real-time properties,
+     * and SystemClock / PowerManager Doze & Deep Sleep counters.
      */
     fun updateFromIntent(intent: Intent?, designCapMah: Int): BatterySnapshot {
-        val src = intent ?: context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val src = intent ?: runCatching {
+            context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        }.getOrNull()
         val now = System.currentTimeMillis()
 
         val rawLevel = src?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
@@ -100,7 +109,6 @@ class BatteryRepository(
         }
 
         val rawVoltage = src?.getIntExtra(BatteryManager.EXTRA_VOLTAGE, 0) ?: 0
-        // Some OEMs report voltage in V or cV if < 100; normalize to mV
         val voltageMv = when {
             rawVoltage <= 0 -> 0
             rawVoltage < 20 -> rawVoltage * 1000
@@ -126,15 +134,14 @@ class BatteryRepository(
         val tech = src?.getStringExtra(BatteryManager.EXTRA_TECHNOLOGY)
             ?.takeIf { it.isNotBlank() }?.uppercase() ?: "LI-ION"
 
-        // Normalize current: Android devices report BATTERY_PROPERTY_CURRENT_NOW in either µA or mA,
-        // and some invert the sign (positive for discharge vs positive for charge).
-        val rawCurrentProp = batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW)
+        val rawCurrentProp = runCatching {
+            batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW)
+        }.getOrDefault(0)
         val normalizedCurrentMa = normalizeCurrentToMa(rawCurrentProp, isCharging, statusInt)
 
         synchronized(recentCurrentsMa) {
             if (normalizedCurrentMa != 0) {
                 if (recentCurrentsMa.isNotEmpty() && (recentCurrentsMa.last() > 0) != (normalizedCurrentMa > 0)) {
-                    // Clear rolling buffer immediately when switching between charge and discharge
                     recentCurrentsMa.clear()
                 }
                 if (recentCurrentsMa.size >= 12) recentCurrentsMa.removeFirst()
@@ -147,18 +154,17 @@ class BatteryRepository(
             else recentCurrentsMa.average().roundToInt()
         }
 
-        // Charge counter in µAh -> mAh
-        val rawChargeCounterUah = batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CHARGE_COUNTER)
+        val rawChargeCounterUah = runCatching {
+            batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CHARGE_COUNTER)
+        }.getOrDefault(0)
         val chargeCounterMah = if (rawChargeCounterUah > 10_000 && rawChargeCounterUah != Int.MIN_VALUE) {
             (rawChargeCounterUah / 1000f).roundToInt()
         } else if (rawChargeCounterUah in 100..10_000) {
-            // Device already reports in mAh
             rawChargeCounterUah
         } else {
             null
         }
 
-        // Estimate actual full capacity from CHARGE_COUNTER and current level% when level >= 15%
         val estFullCapMah = if (chargeCounterMah != null && levelPct >= 15) {
             ((chargeCounterMah.toFloat() / levelPct.toFloat()) * 100f).roundToInt()
                 .takeIf { it in 500..25000 }
@@ -168,14 +174,12 @@ class BatteryRepository(
 
         val effectiveCapacityMah = (estFullCapMah ?: designCapMah).coerceAtLeast(500)
 
-        // Speed in %/hr = (|avgMa| / effectiveCapacityMah) * 100
         val speedPctPerHr = if (avgMa != 0) {
             (abs(avgMa).toFloat() / effectiveCapacityMah.toFloat()) * 100f
         } else {
             0f
         }
 
-        // ETA in minutes to Full (when charging andavgMa > 0) or to Empty (when discharging and avgMa < 0)
         val etaMinutes = when {
             statusInt == BatteryManager.BATTERY_STATUS_FULL -> 0
             isCharging && avgMa > 25 && levelPct < 100 -> {
@@ -195,7 +199,14 @@ class BatteryRepository(
             0f
         }
 
-        val screenOn = powerManager.isInteractive
+        val screenOn = runCatching { powerManager.isInteractive }.getOrDefault(true)
+        val isDoze = runCatching { powerManager.isDeviceIdleMode }.getOrDefault(false)
+        val isPowerSave = runCatching { powerManager.isPowerSaveMode }.getOrDefault(false)
+
+        // System-wide Deep Sleep since boot: elapsedRealtime includes deep sleep, uptimeMillis does not
+        val elapsedMs = SystemClock.elapsedRealtime().coerceAtLeast(1L)
+        val uptimeMs = SystemClock.uptimeMillis().coerceIn(0L, elapsedMs)
+        val deepSleepMs = (elapsedMs - uptimeMs).coerceAtLeast(0L)
 
         val snap = BatterySnapshot(
             timestampMillis = now,
@@ -215,20 +226,20 @@ class BatteryRepository(
             speedPercentPerHour = speedPctPerHr,
             etaMinutes = etaMinutes,
             powerWatts = powerWatts,
-            isScreenOn = screenOn
+            isScreenOn = screenOn,
+            isDeviceIdleDoze = isDoze,
+            isPowerSaveMode = isPowerSave,
+            bootElapsedRealtimeMs = elapsedMs,
+            bootDeepSleepMs = deepSleepMs,
+            bootAwakeUptimeMs = uptimeMs
         )
         _snapshot.value = snap
         return snap
     }
 
-    /**
-     * Converts raw BATTERY_PROPERTY_CURRENT_NOW to signed mA:
-     * +mA when charging, -mA when discharging, 0 when invalid/full idle.
-     */
     private fun normalizeCurrentToMa(rawProp: Int, isCharging: Boolean, statusInt: Int): Int {
         if (rawProp == 0 || rawProp == Int.MIN_VALUE || rawProp == Int.MAX_VALUE) return 0
         val absVal = abs(rawProp)
-        // Values > 25,000 are reported in µA; divide by 1000. Values <= 25,000 are already in mA.
         val magnitudeMa = if (absVal > 25_000) (absVal / 1000f).roundToInt() else absVal
         if (magnitudeMa == 0) return 0
 
@@ -239,10 +250,6 @@ class BatteryRepository(
         }
     }
 
-    /**
-     * Records periodic sample to Room if at least sampleIntervalMinutes have elapsed,
-     * and updates the ongoing charge/discharge session in Room.
-     */
     suspend fun recordTelemetryIfNeeded(
         snapshot: BatterySnapshot,
         sampleIntervalMinutes: Int,
@@ -293,7 +300,6 @@ class BatteryRepository(
             val id = dao.insertSession(newSession)
             activeSessionCache = newSession.copy(id = id)
         } else if (currentActive.isCharging != snapshot.isCharging) {
-            // Close previous session and open a new session for the new plug state
             val closed = currentActive.copy(
                 endTimeMillis = now,
                 isActive = false

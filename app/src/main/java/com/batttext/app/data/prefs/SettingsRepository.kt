@@ -43,13 +43,18 @@ data class UserSettings(
 )
 
 /**
- * Screen-on vs screen-off drain accounting counters persisted across service restarts.
+ * Screen-on, Screen-off, Deep Sleep, and Awake (Wakelock) Idle counters persisted across restarts.
+ * Deep sleep is calculated during screen-off slices using:
+ *   deepSleepMs = elapsedRealtimeDelta - uptimeMillisDelta
+ *   awakeIdleMs = uptimeMillisDelta (while screen is off)
  */
 data class ScreenDrainStats(
     val screenOnDrainPercent: Float = 0f,
     val screenOffDrainPercent: Float = 0f,
     val screenOnDurationMs: Long = 0L,
     val screenOffDurationMs: Long = 0L,
+    val deepSleepDurationMs: Long = 0L,
+    val awakeIdleDurationMs: Long = 0L,
     val resetTimestampMs: Long = System.currentTimeMillis()
 )
 
@@ -78,11 +83,13 @@ class SettingsRepository(private val context: Context) {
         val ALERT_TEMP_C = intPreferencesKey("alert_temp_c")
         val ALERT_PLUG_CHANGE = booleanPreferencesKey("alert_plug_change")
 
-        // Screen on/off drain counters (stored in milli-percent for integer precision)
+        // Screen on/off & deep sleep counters (stored in milli-percent for integer precision)
         val SCREEN_ON_DRAIN_MPCT = intPreferencesKey("screen_on_drain_mpct")
         val SCREEN_OFF_DRAIN_MPCT = intPreferencesKey("screen_off_drain_mpct")
         val SCREEN_ON_DURATION_MS = longPreferencesKey("screen_on_duration_ms")
         val SCREEN_OFF_DURATION_MS = longPreferencesKey("screen_off_duration_ms")
+        val DEEP_SLEEP_DURATION_MS = longPreferencesKey("deep_sleep_duration_ms")
+        val AWAKE_IDLE_DURATION_MS = longPreferencesKey("awake_idle_duration_ms")
         val SCREEN_RESET_TS = longPreferencesKey("screen_reset_ts")
     }
 
@@ -118,6 +125,8 @@ class SettingsRepository(private val context: Context) {
             screenOffDrainPercent = (prefs[Keys.SCREEN_OFF_DRAIN_MPCT] ?: 0) / 1000f,
             screenOnDurationMs = prefs[Keys.SCREEN_ON_DURATION_MS] ?: 0L,
             screenOffDurationMs = prefs[Keys.SCREEN_OFF_DURATION_MS] ?: 0L,
+            deepSleepDurationMs = prefs[Keys.DEEP_SLEEP_DURATION_MS] ?: 0L,
+            awakeIdleDurationMs = prefs[Keys.AWAKE_IDLE_DURATION_MS] ?: 0L,
             resetTimestampMs = prefs[Keys.SCREEN_RESET_TS] ?: System.currentTimeMillis()
         )
     }
@@ -144,8 +153,17 @@ class SettingsRepository(private val context: Context) {
     suspend fun setAlertHighTempCelsius(tempC: Int) = context.dataStore.edit { it[Keys.ALERT_TEMP_C] = tempC.coerceIn(30, 60) }
     suspend fun setAlertPlugStateChange(enabled: Boolean) = context.dataStore.edit { it[Keys.ALERT_PLUG_CHANGE] = enabled }
 
-    suspend fun recordScreenSlice(isScreenOn: Boolean, deltaPercent: Int, deltaDurationMs: Long) {
-        if (deltaDurationMs <= 0L && deltaPercent <= 0) return
+    suspend fun recordScreenSlice(
+        isScreenOn: Boolean,
+        deltaPercent: Int,
+        deltaElapsedMs: Long,
+        deltaUptimeMs: Long
+    ) {
+        if (deltaElapsedMs <= 0L && deltaPercent <= 0) return
+        val safeElapsed = deltaElapsedMs.coerceAtLeast(0L)
+        val safeUptime = deltaUptimeMs.coerceIn(0L, safeElapsed)
+        val deepSleepSlice = (safeElapsed - safeUptime).coerceAtLeast(0L)
+
         context.dataStore.edit { prefs ->
             if (!prefs.contains(Keys.SCREEN_RESET_TS)) {
                 prefs[Keys.SCREEN_RESET_TS] = System.currentTimeMillis()
@@ -154,12 +172,17 @@ class SettingsRepository(private val context: Context) {
                 val curDrain = prefs[Keys.SCREEN_ON_DRAIN_MPCT] ?: 0
                 val curDur = prefs[Keys.SCREEN_ON_DURATION_MS] ?: 0L
                 prefs[Keys.SCREEN_ON_DRAIN_MPCT] = curDrain + (deltaPercent.coerceAtLeast(0) * 1000)
-                prefs[Keys.SCREEN_ON_DURATION_MS] = curDur + deltaDurationMs.coerceAtLeast(0L)
+                prefs[Keys.SCREEN_ON_DURATION_MS] = curDur + safeElapsed
             } else {
                 val curDrain = prefs[Keys.SCREEN_OFF_DRAIN_MPCT] ?: 0
                 val curDur = prefs[Keys.SCREEN_OFF_DURATION_MS] ?: 0L
+                val curDeep = prefs[Keys.DEEP_SLEEP_DURATION_MS] ?: 0L
+                val curAwake = prefs[Keys.AWAKE_IDLE_DURATION_MS] ?: 0L
+
                 prefs[Keys.SCREEN_OFF_DRAIN_MPCT] = curDrain + (deltaPercent.coerceAtLeast(0) * 1000)
-                prefs[Keys.SCREEN_OFF_DURATION_MS] = curDur + deltaDurationMs.coerceAtLeast(0L)
+                prefs[Keys.SCREEN_OFF_DURATION_MS] = curDur + safeElapsed
+                prefs[Keys.DEEP_SLEEP_DURATION_MS] = curDeep + deepSleepSlice
+                prefs[Keys.AWAKE_IDLE_DURATION_MS] = curAwake + safeUptime
             }
         }
     }
@@ -170,6 +193,8 @@ class SettingsRepository(private val context: Context) {
             prefs[Keys.SCREEN_OFF_DRAIN_MPCT] = 0
             prefs[Keys.SCREEN_ON_DURATION_MS] = 0L
             prefs[Keys.SCREEN_OFF_DURATION_MS] = 0L
+            prefs[Keys.DEEP_SLEEP_DURATION_MS] = 0L
+            prefs[Keys.AWAKE_IDLE_DURATION_MS] = 0L
             prefs[Keys.SCREEN_RESET_TS] = System.currentTimeMillis()
         }
     }

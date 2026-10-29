@@ -5,6 +5,9 @@ import com.batttext.app.data.db.AppDatabase
 import com.batttext.app.data.prefs.SettingsRepository
 import com.batttext.app.data.repository.BatteryRepository
 import com.batttext.app.notification.NotificationHelper
+import java.io.File
+import java.io.PrintWriter
+import java.io.StringWriter
 
 class BattTextApp : Application() {
 
@@ -23,6 +26,8 @@ class BattTextApp : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        installCrashLogger()
+
         database = AppDatabase.getInstance(this)
         settingsRepository = SettingsRepository(this)
         batteryRepository = BatteryRepository(this, database.batteryDao(), settingsRepository)
@@ -30,7 +35,34 @@ class BattTextApp : Application() {
         notificationHelper.createChannels()
     }
 
+    private fun installCrashLogger() {
+        val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            runCatching {
+                val sw = StringWriter()
+                throwable.printStackTrace(PrintWriter(sw))
+                File(filesDir, CRASH_LOG_FILENAME).writeText(sw.toString())
+            }
+            defaultHandler?.uncaughtException(thread, throwable)
+        }
+    }
+
+    fun readLastCrashLog(): String? {
+        return runCatching {
+            val file = File(filesDir, CRASH_LOG_FILENAME)
+            if (file.exists()) file.readText().takeIf { it.isNotBlank() } else null
+        }.getOrNull()
+    }
+
+    fun clearCrashLog() {
+        runCatching {
+            File(filesDir, CRASH_LOG_FILENAME).delete()
+        }
+    }
+
     companion object {
+        private const val CRASH_LOG_FILENAME = "last_crash.txt"
+
         lateinit var instance: BattTextApp
             private set
     }
