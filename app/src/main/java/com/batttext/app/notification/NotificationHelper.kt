@@ -34,7 +34,6 @@ class NotificationHelper(private val context: Context) {
     private val notificationManager =
         context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
-    // Cache dynamically rendered text status bar icons keyed by their exact short text string
     private val iconCache = object : LruCache<String, IconCompat>(24) {}
 
     fun createChannels() {
@@ -75,8 +74,9 @@ class NotificationHelper(private val context: Context) {
     }
 
     /**
-     * Builds a clean, uncluttered notification containing ONLY the exact fields enabled by the user.
-     * Never shows battery health, capacity, or charging status text.
+     * Builds a clean, compact, easily readable 2-line notification modeled directly on BatteryGuru:
+     * - Line 1 (Title): `-340 mA  •  31.2°C  •  Left: 6h 12m` (or `Full in: 42m`)
+     * - Line 2 (Body) : `Active: 8.2%/h  •  Idle: 0.5%/h  •  Deep sleep: 86%`
      */
     fun buildOngoingNotification(
         snapshot: BatterySnapshot,
@@ -95,33 +95,35 @@ class NotificationHelper(private val context: Context) {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        // Line 1: Live metrics selected by user (e.g., `78% · -340mA · 31.2° · 4h12m`)
+        // Line 1: Live electric & thermal telemetry (BatteryGuru top line)
         val topParts = mutableListOf<String>()
         if (settings.notifShowLevel) {
             topParts.add("${snapshot.levelPercent}%")
         }
         if (settings.notifShowCurrent) {
             val sign = if (snapshot.currentMa > 0) "+" else ""
-            topParts.add("${sign}${snapshot.currentMa}mA")
+            topParts.add("${sign}${snapshot.currentMa} mA")
         }
         if (settings.notifShowPower) {
-            topParts.add(String.format(Locale.US, "%.1fW", snapshot.powerWatts))
+            topParts.add(String.format(Locale.US, "%.1f W", snapshot.powerWatts))
         }
         if (settings.notifShowTemp) {
             topParts.add(formatTemp(snapshot.temperatureDeciC, settings.useFahrenheit))
         }
         if (settings.notifShowVoltage) {
-            topParts.add(String.format(Locale.US, "%.2fV", snapshot.voltageMv / 1000f))
+            topParts.add(String.format(Locale.US, "%.2f V", snapshot.voltageMv / 1000f))
         }
         if (settings.notifShowEta) {
             snapshot.etaMinutes?.let { mins ->
                 val h = mins / 60
                 val m = mins % 60
-                topParts.add("${h}h${String.format(Locale.US, "%02d", m)}m")
+                val timeStr = if (h > 0) "${h}h ${m}m" else "${m}m"
+                val prefix = if (snapshot.isCharging) "Full in:" else "Left:"
+                topParts.add("$prefix $timeStr")
             }
         }
 
-        // Line 2: Consumption per hour & Doze metrics selected by user (e.g., `ACT 8.2%/h · IDL 0.5%/h · DOZE OFF`)
+        // Line 2: Active drain/h, Idle drain/h, and Deep Sleep % (BatteryGuru bottom line)
         val bottomParts = mutableListOf<String>()
         if (settings.notifShowActiveRate) {
             val actStr = screenStats.activeDrainRatePctPerHour?.let {
@@ -129,7 +131,7 @@ class NotificationHelper(private val context: Context) {
             } ?: if (!snapshot.isCharging && snapshot.isScreenOn && snapshot.speedPercentPerHour > 0f) {
                 String.format(Locale.US, "%.1f%%/h", snapshot.speedPercentPerHour)
             } else "--%/h"
-            bottomParts.add("ACT $actStr")
+            bottomParts.add("Active: $actStr")
         }
         if (settings.notifShowIdleRate) {
             val idlStr = screenStats.idleDrainRatePctPerHour?.let {
@@ -137,31 +139,34 @@ class NotificationHelper(private val context: Context) {
             } ?: if (!snapshot.isCharging && !snapshot.isScreenOn && snapshot.speedPercentPerHour > 0f) {
                 String.format(Locale.US, "%.1f%%/h", snapshot.speedPercentPerHour)
             } else "--%/h"
-            bottomParts.add("IDL $idlStr")
-        }
-        if (settings.notifShowDozeState) {
-            val dozeStr = when {
-                snapshot.isDeviceIdleDoze -> "DOZE DEEP"
-                !snapshot.isScreenOn -> "DOZE LIGHT"
-                else -> "DOZE OFF"
-            }
-            bottomParts.add(dozeStr)
+            bottomParts.add("Idle: $idlStr")
         }
         if (settings.notifShowDeepSleepPct) {
-            val bootDeepPct = if (snapshot.bootElapsedRealtimeMs > 0L) {
+            val trackedOffTotalMs = screenStats.deepSleepDurationMs + screenStats.awakeIdleDurationMs
+            val sleepPct = if (trackedOffTotalMs > 60_000L) {
+                (screenStats.deepSleepDurationMs * 100f) / trackedOffTotalMs.toFloat()
+            } else if (snapshot.bootElapsedRealtimeMs > 0L) {
                 (snapshot.bootDeepSleepMs * 100f) / snapshot.bootElapsedRealtimeMs.toFloat()
             } else 0f
-            bottomParts.add(String.format(Locale.US, "SLP %.0f%%", bootDeepPct))
+            bottomParts.add(String.format(Locale.US, "Deep sleep: %.0f%%", sleepPct))
+        }
+        if (settings.notifShowAwakePct) {
+            val trackedOffTotalMs = screenStats.deepSleepDurationMs + screenStats.awakeIdleDurationMs
+            val awakePct = if (trackedOffTotalMs > 60_000L) {
+                (screenStats.awakeIdleDurationMs * 100f) / trackedOffTotalMs.toFloat()
+            } else if (snapshot.bootElapsedRealtimeMs > 0L) {
+                (snapshot.bootAwakeUptimeMs * 100f) / snapshot.bootElapsedRealtimeMs.toFloat()
+            } else 0f
+            bottomParts.add(String.format(Locale.US, "Awake: %.0f%%", awakePct))
         }
 
-        val topLine = topParts.joinToString(" · ")
-        val bottomLine = bottomParts.joinToString(" · ")
+        val topLine = topParts.joinToString("  •  ")
+        val bottomLine = bottomParts.joinToString("  •  ")
 
-        // If user only enabled items from one group, promote it to the single title line with no subtitle
         val finalTitle = when {
             topLine.isNotEmpty() -> topLine
             bottomLine.isNotEmpty() -> bottomLine
-            else -> "${snapshot.levelPercent}%"
+            else -> "${snapshot.levelPercent}%  •  ${snapshot.currentMa} mA"
         }
         val finalSubtitle = if (topLine.isNotEmpty() && bottomLine.isNotEmpty()) bottomLine else null
 
@@ -180,7 +185,6 @@ class NotificationHelper(private val context: Context) {
             builder.setContentText(finalSubtitle)
         }
 
-        // Dynamic status bar icon based on user's chosen metric
         if (settings.statusBarIconMetric != StatusBarIconMetric.STATIC) {
             runCatching {
                 val (mainText, subLabel) = formatStatusBarIconText(snapshot, settings)
@@ -286,10 +290,6 @@ class NotificationHelper(private val context: Context) {
         }
     }
 
-    /**
-     * Renders any chosen metric (e.g., `78` + `%`, `31` + `°C`, `1.8` + `A`, `7.8` + `W`)
-     * into a crisp 64x64 status bar icon bitmap.
-     */
     private fun getOrCreateTextIcon(mainText: String, unitLabel: String?): IconCompat {
         val cacheKey = "$mainText|${unitLabel.orEmpty()}"
         iconCache.get(cacheKey)?.let { return it }

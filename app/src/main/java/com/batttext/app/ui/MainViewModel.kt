@@ -124,7 +124,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val next = when (settings.value.themeMode) {
                 ThemeMode.AUTO -> ThemeMode.DARK
-                ThemeMode.DARK -> ThemeMode.LIGHT
+                ThemeMode.DARK -> ThemeMode.AMOLED
+                ThemeMode.AMOLED -> ThemeMode.LIGHT
                 ThemeMode.LIGHT -> ThemeMode.AUTO
             }
             settingsRepository.setThemeMode(next)

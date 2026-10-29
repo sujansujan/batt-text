@@ -320,33 +320,12 @@ private fun DeepSleepAndDozeBox(
     val onRate = screenStats.activeDrainRatePctPerHour?.let { String.format(Locale.US, "%.1f %%/h", it) } ?: "-- %/h"
     val offRate = screenStats.idleDrainRatePctPerHour?.let { String.format(Locale.US, "%.1f %%/h", it) } ?: "-- %/h"
 
-    val dozeStateStr = when {
-        snapshot.isDeviceIdleDoze -> "DEEP DOZE (IDLE)"
-        !snapshot.isScreenOn -> "LIGHT IDLE (SCR OFF)"
-        else -> "OFF (SCREEN ON)"
-    }
-    val saverTag = if (snapshot.isPowerSaveMode) "SAVER:ON" else "ZERO-POLL"
-
     TextFramedBox(
-        title = "DEEP SLEEP, DOZE & DRAIN",
-        rightHeaderTag = saverTag
+        title = "DEEP SLEEP & SCREEN DRAIN",
+        rightHeaderTag = "UP ${formatDurationShort(snapshot.bootElapsedRealtimeMs)}"
     ) {
         TextKeyValueRow(
-            label = "DOZE STATUS",
-            value = dozeStateStr,
-            valueColor = if (snapshot.isDeviceIdleDoze) colors.good else colors.foreground,
-            trailingContent = if (!isIgnoringBatteryOptimizations) {
-                {
-                    TextButtonBracket(
-                        text = "WHITELIST",
-                        onClick = onRequestBatteryOptExemption,
-                        color = colors.link
-                    )
-                }
-            } else null
-        )
-        TextKeyValueRow(
-            label = "BOOT SLEEP",
+            label = "DEEP SLEEP",
             value = String.format(
                 Locale.US,
                 "%.1f%% (%s)",
@@ -363,13 +342,12 @@ private fun DeepSleepAndDozeBox(
             }
         )
         TextKeyValueRow(
-            label = "BOOT AWAKE",
+            label = "AWAKE TIME",
             value = String.format(
                 Locale.US,
-                "%.1f%% (%s) | UP %s",
+                "%.1f%% (%s)",
                 bootAwakePct,
-                formatDurationShort(snapshot.bootAwakeUptimeMs),
-                formatDurationShort(snapshot.bootElapsedRealtimeMs)
+                formatDurationShort(snapshot.bootAwakeUptimeMs)
             ),
             valueColor = colors.foreground
         )
@@ -380,7 +358,7 @@ private fun DeepSleepAndDozeBox(
             label = "SCREEN ON",
             value = String.format(
                 Locale.US,
-                "%.1f%%  (%s | %s)",
+                "%.1f%%  •  %s  •  %s",
                 screenStats.screenOnDrainPercent,
                 formatDurationShort(screenStats.screenOnDurationMs),
                 onRate
@@ -391,7 +369,7 @@ private fun DeepSleepAndDozeBox(
             label = "SCREEN OFF",
             value = String.format(
                 Locale.US,
-                "%.1f%%  (%s | %s)",
+                "%.1f%%  •  %s  •  %s",
                 screenStats.screenOffDrainPercent,
                 formatDurationShort(screenStats.screenOffDurationMs),
                 offRate
@@ -399,18 +377,18 @@ private fun DeepSleepAndDozeBox(
             valueColor = colors.good
         )
         TextKeyValueRow(
-            label = "OFF SLEEP",
+            label = "STANDBY SLP",
             value = if (trackedOffTotalMs > 0L) {
                 String.format(
                     Locale.US,
-                    "%.1f%% (%s) | WAKELOCK %.1f%% (%s)",
+                    "%.0f%% SLEEP (%s)  •  %.0f%% AWAKE (%s)",
                     trackedDeepPct,
                     formatDurationShort(screenStats.deepSleepDurationMs),
                     trackedAwakePct,
                     formatDurationShort(screenStats.awakeIdleDurationMs)
                 )
             } else {
-                "WAITING FOR SCREEN-OFF STANDBY..."
+                "LOCK SCREEN TO RECORD STANDBY..."
             },
             valueColor = colors.accent,
             trailingContent = {
@@ -424,9 +402,6 @@ private fun DeepSleepAndDozeBox(
     }
 }
 
-/**
- * Auto-detected Device & Battery Hardware Box with Shizuku integration.
- */
 @Composable
 private fun DeviceAndHardwareBox(
     snapshot: BatterySnapshot,

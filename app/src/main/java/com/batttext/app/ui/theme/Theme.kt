@@ -42,34 +42,60 @@ data class BattTextColors(
     val border: Color
 )
 
+/**
+ * Refined Dracula Pro palette: deep obsidian background (#1B1D26) with subtle slate borders (#3E445E)
+ * so the live telemetry values pop with zero visual clutter.
+ */
 val DraculaPalette = BattTextColors(
     isDark = true,
-    background = Color(0xFF282A36),
-    panel = Color(0xFF21222C),
+    background = Color(0xFF1B1D26),
+    panel = Color(0xFF232634),
     foreground = Color(0xFFF8F8F2),
-    muted = Color(0xFF6272A4),
+    muted = Color(0xFF7B88A8),
     label = Color(0xFF8BE9FD),
     good = Color(0xFF50FA7B),
     warning = Color(0xFFFFB86C),
     critical = Color(0xFFFF5555),
     accent = Color(0xFFBD93F9),
     link = Color(0xFFFF79C6),
-    border = Color(0xFF6272A4)
+    border = Color(0xFF3E445E)
 )
 
+/**
+ * Pure AMOLED Black palette (#000000) for maximum OLED power savings & infinite contrast on POCO displays.
+ */
+val AmoledPalette = BattTextColors(
+    isDark = true,
+    background = Color(0xFF000000),
+    panel = Color(0xFF11131A),
+    foreground = Color(0xFFF4F4F6),
+    muted = Color(0xFF6E768A),
+    label = Color(0xFF7CE3F6),
+    good = Color(0xFF4AF676),
+    warning = Color(0xFFFFB35C),
+    critical = Color(0xFFFF4D4D),
+    accent = Color(0xFFB78CF6),
+    link = Color(0xFFFF70C0),
+    border = Color(0xFF2C3142)
+)
+
+/**
+ * Refined Alucard Light palette: warm archival paper (#FAF6E8) with soft stone borders (#D4CEB8)
+ * and deep ink typography.
+ */
 val AlucardPalette = BattTextColors(
     isDark = false,
-    background = Color(0xFFFFFBEB),
-    panel = Color(0xFFF3F0E0),
-    foreground = Color(0xFF1F1F1F),
-    muted = Color(0xFF6C664B),
-    label = Color(0xFF036A96),
+    background = Color(0xFFFAF6E8),
+    panel = Color(0xFFEDE8D5),
+    foreground = Color(0xFF1C1E26),
+    muted = Color(0xFF6E6A59),
+    label = Color(0xFF04668C),
     good = Color(0xFF14710A),
-    warning = Color(0xFFA34D14),
-    critical = Color(0xFFCB3A2A),
-    accent = Color(0xFF644AC9),
-    link = Color(0xFFA41F69),
-    border = Color(0xFF8E8768)
+    warning = Color(0xFFA84A10),
+    critical = Color(0xFFC4302B),
+    accent = Color(0xFF6244C5),
+    link = Color(0xFF9E1C64),
+    border = Color(0xFFC8C1A8)
 )
 
 @Immutable
@@ -171,13 +197,14 @@ fun BattTextTheme(
     content: @Composable () -> Unit
 ) {
     val systemDark = isSystemInDarkTheme()
-    val useDark = when (themeMode) {
-        ThemeMode.AUTO -> systemDark
-        ThemeMode.DARK -> true
-        ThemeMode.LIGHT -> false
+    val palette = when (themeMode) {
+        ThemeMode.AUTO -> if (systemDark) DraculaPalette else AlucardPalette
+        ThemeMode.DARK -> DraculaPalette
+        ThemeMode.AMOLED -> AmoledPalette
+        ThemeMode.LIGHT -> AlucardPalette
     }
+    val useDark = palette.isDark
 
-    val palette = if (useDark) DraculaPalette else AlucardPalette
     val fontFamily = when (fontMode) {
         FontMode.SYSTEM -> FontFamily.Default
         FontMode.MONOSPACE -> FontFamily.Monospace

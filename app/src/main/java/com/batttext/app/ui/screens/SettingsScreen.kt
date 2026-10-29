@@ -109,9 +109,9 @@ fun SettingsScreen(
                 onToggle = { scope.launch { settingsRepository.setNotifShowIdleRate(it) } }
             )
             TextToggleRow(
-                label = "SHOW DOZE STATUS",
-                checked = settings.notifShowDozeState,
-                onToggle = { scope.launch { settingsRepository.setNotifShowDozeState(it) } }
+                label = "SHOW AWAKE %",
+                checked = settings.notifShowAwakePct,
+                onToggle = { scope.launch { settingsRepository.setNotifShowAwakePct(it) } }
             )
             TextToggleRow(
                 label = "SHOW DEEP SLEEP %",
@@ -189,7 +189,7 @@ fun SettingsScreen(
                 valueText = settings.themeMode.name,
                 onDecrement = onCycleThemeMode,
                 onIncrement = onCycleThemeMode,
-                subtitle = "AUTO follows system; DARK = Dracula, LIGHT = Alucard"
+                subtitle = "AUTO / DARK (Dracula) / AMOLED (Pure Black) / LIGHT (Alucard)"
             )
             TextDivider()
             TextStepperRow(

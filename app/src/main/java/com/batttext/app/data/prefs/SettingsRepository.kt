@@ -14,16 +14,16 @@ import kotlinx.coroutines.flow.map
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "batttext_settings")
 
-enum class ThemeMode { AUTO, DARK, LIGHT }
+enum class ThemeMode { AUTO, DARK, AMOLED, LIGHT }
 enum class FontMode { SYSTEM, MONOSPACE }
 
 /**
  * Which live value to render as plain-text digits in the status bar icon.
  */
 enum class StatusBarIconMetric(val label: String) {
+    CURRENT("CURRENT mA"),
     LEVEL("LEVEL %"),
     TEMPERATURE("TEMP"),
-    CURRENT("CURRENT"),
     POWER("WATTS"),
     STATIC("STATIC [███]")
 }
@@ -33,27 +33,26 @@ data class UserSettings(
     val fontMode: FontMode = FontMode.SYSTEM,
     val pureAsciiBorders: Boolean = false,
     val useFahrenheit: Boolean = false,
-    // 0 means use auto-detected hardware capacity from PowerProfile / Kernel sysfs / Shizuku
     val designCapacityOverrideMah: Int = 0,
     val sampleIntervalMinutes: Int = 10,
     val retentionDays: Int = 14,
     val backgroundMonitorEnabled: Boolean = true,
     val startOnBoot: Boolean = true,
 
-    // Status bar icon customization
+    // Status bar icon customization (BatteryGuru defaults to Current mA or Temperature or Level %)
     val statusBarIconMetric: StatusBarIconMetric = StatusBarIconMetric.LEVEL,
 
-    // Individual toggles for what appears in the notification (uncluttered defaults, no health/capacity/charging status)
-    val notifShowLevel: Boolean = true,
+    // Individual toggles for BatteryGuru-style 2-line notification (compact, readable, zero redundant Doze state)
     val notifShowCurrent: Boolean = true,
-    val notifShowPower: Boolean = false,
     val notifShowTemp: Boolean = true,
-    val notifShowVoltage: Boolean = false,
     val notifShowEta: Boolean = true,
+    val notifShowLevel: Boolean = false,
+    val notifShowPower: Boolean = false,
+    val notifShowVoltage: Boolean = false,
     val notifShowActiveRate: Boolean = true,
     val notifShowIdleRate: Boolean = true,
-    val notifShowDozeState: Boolean = true,
-    val notifShowDeepSleepPct: Boolean = false,
+    val notifShowDeepSleepPct: Boolean = true,
+    val notifShowAwakePct: Boolean = false,
 
     // Threshold alerts
     val alertSoundEnabled: Boolean = true,
@@ -78,18 +77,12 @@ data class ScreenDrainStats(
     val awakeIdleDurationMs: Long = 0L,
     val resetTimestampMs: Long = System.currentTimeMillis()
 ) {
-    /**
-     * Active (screen-on) consumption rate in %/hr, or null if < 2 minutes of screen-on discharge recorded.
-     */
     val activeDrainRatePctPerHour: Float?
         get() {
             val hours = screenOnDurationMs / 3_600_000f
             return if (hours >= 0.03f) screenOnDrainPercent / hours else null
         }
 
-    /**
-     * Idle (screen-off) consumption rate in %/hr, or null if < 2 minutes of screen-off discharge recorded.
-     */
     val idleDrainRatePctPerHour: Float?
         get() {
             val hours = screenOffDurationMs / 3_600_000f
@@ -119,8 +112,8 @@ class SettingsRepository(private val context: Context) {
         val NOTIF_SHOW_ETA = booleanPreferencesKey("notif_show_eta")
         val NOTIF_SHOW_ACTIVE_RATE = booleanPreferencesKey("notif_show_active_rate")
         val NOTIF_SHOW_IDLE_RATE = booleanPreferencesKey("notif_show_idle_rate")
-        val NOTIF_SHOW_DOZE = booleanPreferencesKey("notif_show_doze")
         val NOTIF_SHOW_DEEP_SLEEP = booleanPreferencesKey("notif_show_deep_sleep")
+        val NOTIF_SHOW_AWAKE_PCT = booleanPreferencesKey("notif_show_awake_pct")
 
         val ALERT_SOUND = booleanPreferencesKey("alert_sound")
         val ALERT_LIMIT_EN = booleanPreferencesKey("alert_limit_en")
@@ -159,16 +152,16 @@ class SettingsRepository(private val context: Context) {
                 StatusBarIconMetric.valueOf(prefs[Keys.STATUS_BAR_ICON_METRIC] ?: "LEVEL")
             }.getOrDefault(StatusBarIconMetric.LEVEL),
 
-            notifShowLevel = prefs[Keys.NOTIF_SHOW_LEVEL] ?: true,
             notifShowCurrent = prefs[Keys.NOTIF_SHOW_CURRENT] ?: true,
-            notifShowPower = prefs[Keys.NOTIF_SHOW_POWER] ?: false,
             notifShowTemp = prefs[Keys.NOTIF_SHOW_TEMP] ?: true,
-            notifShowVoltage = prefs[Keys.NOTIF_SHOW_VOLTAGE] ?: false,
             notifShowEta = prefs[Keys.NOTIF_SHOW_ETA] ?: true,
+            notifShowLevel = prefs[Keys.NOTIF_SHOW_LEVEL] ?: false,
+            notifShowPower = prefs[Keys.NOTIF_SHOW_POWER] ?: false,
+            notifShowVoltage = prefs[Keys.NOTIF_SHOW_VOLTAGE] ?: false,
             notifShowActiveRate = prefs[Keys.NOTIF_SHOW_ACTIVE_RATE] ?: true,
             notifShowIdleRate = prefs[Keys.NOTIF_SHOW_IDLE_RATE] ?: true,
-            notifShowDozeState = prefs[Keys.NOTIF_SHOW_DOZE] ?: true,
-            notifShowDeepSleepPct = prefs[Keys.NOTIF_SHOW_DEEP_SLEEP] ?: false,
+            notifShowDeepSleepPct = prefs[Keys.NOTIF_SHOW_DEEP_SLEEP] ?: true,
+            notifShowAwakePct = prefs[Keys.NOTIF_SHOW_AWAKE_PCT] ?: false,
 
             alertSoundEnabled = prefs[Keys.ALERT_SOUND] ?: true,
             alertChargeLimitEnabled = prefs[Keys.ALERT_LIMIT_EN] ?: true,
@@ -219,8 +212,8 @@ class SettingsRepository(private val context: Context) {
     suspend fun setNotifShowEta(enabled: Boolean) = context.dataStore.edit { it[Keys.NOTIF_SHOW_ETA] = enabled }
     suspend fun setNotifShowActiveRate(enabled: Boolean) = context.dataStore.edit { it[Keys.NOTIF_SHOW_ACTIVE_RATE] = enabled }
     suspend fun setNotifShowIdleRate(enabled: Boolean) = context.dataStore.edit { it[Keys.NOTIF_SHOW_IDLE_RATE] = enabled }
-    suspend fun setNotifShowDozeState(enabled: Boolean) = context.dataStore.edit { it[Keys.NOTIF_SHOW_DOZE] = enabled }
     suspend fun setNotifShowDeepSleepPct(enabled: Boolean) = context.dataStore.edit { it[Keys.NOTIF_SHOW_DEEP_SLEEP] = enabled }
+    suspend fun setNotifShowAwakePct(enabled: Boolean) = context.dataStore.edit { it[Keys.NOTIF_SHOW_AWAKE_PCT] = enabled }
 
     suspend fun setAlertSoundEnabled(enabled: Boolean) = context.dataStore.edit { it[Keys.ALERT_SOUND] = enabled }
     suspend fun setAlertChargeLimitEnabled(enabled: Boolean) = context.dataStore.edit { it[Keys.ALERT_LIMIT_EN] = enabled }
