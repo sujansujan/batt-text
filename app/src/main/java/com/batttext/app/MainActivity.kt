@@ -93,7 +93,7 @@ class MainActivity : ComponentActivity() {
                     }
                     while (true) {
                         viewModel.refreshLiveSnapshot()
-                        delay(5000L)
+                        delay(10_000L)
                     }
                 }
             }

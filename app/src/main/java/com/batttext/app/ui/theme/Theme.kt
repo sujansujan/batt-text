@@ -5,9 +5,6 @@ import androidx.compose.foundation.IndicationNodeFactory
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.interaction.InteractionSource
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
@@ -42,10 +39,6 @@ data class BattTextColors(
     val border: Color
 )
 
-/**
- * Refined Dracula Pro palette: deep obsidian background (#1B1D26) with subtle slate borders (#3E445E)
- * so the live telemetry values pop with zero visual clutter.
- */
 val DraculaPalette = BattTextColors(
     isDark = true,
     background = Color(0xFF1B1D26),
@@ -61,9 +54,6 @@ val DraculaPalette = BattTextColors(
     border = Color(0xFF3E445E)
 )
 
-/**
- * Pure AMOLED Black palette (#000000) for maximum OLED power savings & infinite contrast on POCO displays.
- */
 val AmoledPalette = BattTextColors(
     isDark = true,
     background = Color(0xFF000000),
@@ -79,10 +69,6 @@ val AmoledPalette = BattTextColors(
     border = Color(0xFF2C3142)
 )
 
-/**
- * Refined Alucard Light palette: warm archival paper (#FAF6E8) with soft stone borders (#D4CEB8)
- * and deep ink typography.
- */
 val AlucardPalette = BattTextColors(
     isDark = false,
     background = Color(0xFFFAF6E8),
@@ -226,31 +212,11 @@ fun BattTextTheme(
         }
     }
 
-    val m3Scheme = if (useDark) {
-        darkColorScheme(
-            background = palette.background,
-            surface = palette.background,
-            onBackground = palette.foreground,
-            onSurface = palette.foreground,
-            primary = palette.accent
-        )
-    } else {
-        lightColorScheme(
-            background = palette.background,
-            surface = palette.background,
-            onBackground = palette.foreground,
-            onSurface = palette.foreground,
-            primary = palette.accent
-        )
-    }
-
-    MaterialTheme(colorScheme = m3Scheme) {
-        CompositionLocalProvider(
-            LocalBattTextColors provides palette,
-            LocalBattTextFont provides fontFamily,
-            LocalBattTextCharset provides charset,
-            LocalIndication provides NoIndicationNodeFactory,
-            content = content
-        )
-    }
+    CompositionLocalProvider(
+        LocalBattTextColors provides palette,
+        LocalBattTextFont provides fontFamily,
+        LocalBattTextCharset provides charset,
+        LocalIndication provides NoIndicationNodeFactory,
+        content = content
+    )
 }

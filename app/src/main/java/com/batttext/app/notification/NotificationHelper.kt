@@ -12,9 +12,9 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.PorterDuff
 import android.graphics.Typeface
 import android.os.Build
-import android.util.LruCache
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.IconCompat
@@ -34,9 +34,26 @@ class NotificationHelper(private val context: Context) {
     private val notificationManager =
         context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
-    private val iconCache = object : LruCache<String, IconCompat>(24) {}
+    // Reusable 64x64 bitmap, canvas, and paints so status-bar icon updates allocate 0 bytes of RAM
+    private val iconBitmap = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888)
+    private val iconCanvas = Canvas(iconBitmap)
+    private val mainPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        textAlign = Paint.Align.CENTER
+    }
+    private val subPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        textAlign = Paint.Align.CENTER
+        textSize = 16f
+    }
+
+    private var lastNotificationSignature: String = ""
+    private var channelsCreated: Boolean = false
 
     fun createChannels() {
+        if (channelsCreated) return
         runCatching {
             val monitorChannel = NotificationChannel(
                 CHANNEL_MONITOR_ID,
@@ -59,6 +76,7 @@ class NotificationHelper(private val context: Context) {
             }
 
             notificationManager.createNotificationChannels(listOf(monitorChannel, alertsChannel))
+            channelsCreated = true
         }
     }
 
@@ -74,9 +92,8 @@ class NotificationHelper(private val context: Context) {
     }
 
     /**
-     * Builds a clean, compact, easily readable 2-line notification modeled directly on BatteryGuru:
-     * - Line 1 (Title): `-340 mA  •  31.2°C  •  Left: 6h 12m` (or `Full in: 42m`)
-     * - Line 2 (Body) : `Active: 8.2%/h  •  Idle: 0.5%/h  •  Deep sleep: 86%`
+     * Builds a clean vertical List View notification (NotificationCompat.InboxStyle)
+     * where each enabled metric appears on its own scannable row.
      */
     fun buildOngoingNotification(
         snapshot: BatterySnapshot,
@@ -95,51 +112,48 @@ class NotificationHelper(private val context: Context) {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        // Line 1: Live electric & thermal telemetry (BatteryGuru top line)
-        val topParts = mutableListOf<String>()
+        val listRows = ArrayList<String>(10)
+
         if (settings.notifShowLevel) {
-            topParts.add("${snapshot.levelPercent}%")
+            listRows.add("Level: ${snapshot.levelPercent}%")
         }
         if (settings.notifShowCurrent) {
             val sign = if (snapshot.currentMa > 0) "+" else ""
-            topParts.add("${sign}${snapshot.currentMa} mA")
+            listRows.add("Current: ${sign}${snapshot.currentMa} mA")
         }
         if (settings.notifShowPower) {
-            topParts.add(String.format(Locale.US, "%.1f W", snapshot.powerWatts))
+            listRows.add(String.format(Locale.US, "Power: %.1f W", snapshot.powerWatts))
         }
         if (settings.notifShowTemp) {
-            topParts.add(formatTemp(snapshot.temperatureDeciC, settings.useFahrenheit))
+            listRows.add("Temp: ${formatTemp(snapshot.temperatureDeciC, settings.useFahrenheit)}")
         }
         if (settings.notifShowVoltage) {
-            topParts.add(String.format(Locale.US, "%.2f V", snapshot.voltageMv / 1000f))
+            listRows.add(String.format(Locale.US, "Voltage: %.2f V", snapshot.voltageMv / 1000f))
         }
         if (settings.notifShowEta) {
             snapshot.etaMinutes?.let { mins ->
                 val h = mins / 60
                 val m = mins % 60
                 val timeStr = if (h > 0) "${h}h ${m}m" else "${m}m"
-                val prefix = if (snapshot.isCharging) "Full in:" else "Left:"
-                topParts.add("$prefix $timeStr")
+                val label = if (snapshot.isCharging) "Full in" else "Time left"
+                listRows.add("$label: $timeStr")
             }
         }
-
-        // Line 2: Active drain/h, Idle drain/h, and Deep Sleep % (BatteryGuru bottom line)
-        val bottomParts = mutableListOf<String>()
         if (settings.notifShowActiveRate) {
             val actStr = screenStats.activeDrainRatePctPerHour?.let {
-                String.format(Locale.US, "%.1f%%/h", it)
+                String.format(Locale.US, "%.1f %%/h", it)
             } ?: if (!snapshot.isCharging && snapshot.isScreenOn && snapshot.speedPercentPerHour > 0f) {
-                String.format(Locale.US, "%.1f%%/h", snapshot.speedPercentPerHour)
-            } else "--%/h"
-            bottomParts.add("Active: $actStr")
+                String.format(Locale.US, "%.1f %%/h", snapshot.speedPercentPerHour)
+            } else "-- %/h"
+            listRows.add("Active drain: $actStr")
         }
         if (settings.notifShowIdleRate) {
             val idlStr = screenStats.idleDrainRatePctPerHour?.let {
-                String.format(Locale.US, "%.1f%%/h", it)
+                String.format(Locale.US, "%.1f %%/h", it)
             } ?: if (!snapshot.isCharging && !snapshot.isScreenOn && snapshot.speedPercentPerHour > 0f) {
-                String.format(Locale.US, "%.1f%%/h", snapshot.speedPercentPerHour)
-            } else "--%/h"
-            bottomParts.add("Idle: $idlStr")
+                String.format(Locale.US, "%.1f %%/h", snapshot.speedPercentPerHour)
+            } else "-- %/h"
+            listRows.add("Idle drain: $idlStr")
         }
         if (settings.notifShowDeepSleepPct) {
             val trackedOffTotalMs = screenStats.deepSleepDurationMs + screenStats.awakeIdleDurationMs
@@ -148,7 +162,7 @@ class NotificationHelper(private val context: Context) {
             } else if (snapshot.bootElapsedRealtimeMs > 0L) {
                 (snapshot.bootDeepSleepMs * 100f) / snapshot.bootElapsedRealtimeMs.toFloat()
             } else 0f
-            bottomParts.add(String.format(Locale.US, "Deep sleep: %.0f%%", sleepPct))
+            listRows.add(String.format(Locale.US, "Deep sleep: %.0f%%", sleepPct))
         }
         if (settings.notifShowAwakePct) {
             val trackedOffTotalMs = screenStats.deepSleepDurationMs + screenStats.awakeIdleDurationMs
@@ -157,22 +171,28 @@ class NotificationHelper(private val context: Context) {
             } else if (snapshot.bootElapsedRealtimeMs > 0L) {
                 (snapshot.bootAwakeUptimeMs * 100f) / snapshot.bootElapsedRealtimeMs.toFloat()
             } else 0f
-            bottomParts.add(String.format(Locale.US, "Awake: %.0f%%", awakePct))
+            listRows.add(String.format(Locale.US, "Awake idle: %.0f%%", awakePct))
         }
 
-        val topLine = topParts.joinToString("  •  ")
-        val bottomLine = bottomParts.joinToString("  •  ")
-
-        val finalTitle = when {
-            topLine.isNotEmpty() -> topLine
-            bottomLine.isNotEmpty() -> bottomLine
-            else -> "${snapshot.levelPercent}%  •  ${snapshot.currentMa} mA"
+        if (listRows.isEmpty()) {
+            listRows.add("Level: ${snapshot.levelPercent}%")
         }
-        val finalSubtitle = if (topLine.isNotEmpty() && bottomLine.isNotEmpty()) bottomLine else null
+
+        // First item is the collapsed title; second item (if present) is the collapsed subtitle;
+        // Expanding the notification shows every item in a vertical InboxStyle list!
+        val collapsedTitle = listRows[0]
+        val collapsedSubtitle = listRows.getOrNull(1)
+
+        val inboxStyle = NotificationCompat.InboxStyle()
+            .setBigContentTitle(collapsedTitle)
+        for (i in 1 until listRows.size) {
+            inboxStyle.addLine(listRows[i])
+        }
 
         val builder = NotificationCompat.Builder(context, CHANNEL_MONITOR_ID)
             .setSmallIcon(R.drawable.ic_stat_battery)
-            .setContentTitle(finalTitle)
+            .setContentTitle(collapsedTitle)
+            .setStyle(inboxStyle)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setSilent(true)
@@ -181,14 +201,14 @@ class NotificationHelper(private val context: Context) {
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setContentIntent(contentPendingIntent)
 
-        if (finalSubtitle != null) {
-            builder.setContentText(finalSubtitle)
+        if (collapsedSubtitle != null) {
+            builder.setContentText(collapsedSubtitle)
         }
 
         if (settings.statusBarIconMetric != StatusBarIconMetric.STATIC) {
             runCatching {
                 val (mainText, subLabel) = formatStatusBarIconText(snapshot, settings)
-                builder.setSmallIcon(getOrCreateTextIcon(mainText, subLabel))
+                builder.setSmallIcon(renderTextIconInPlace(mainText, subLabel))
             }
         }
 
@@ -233,6 +253,13 @@ class NotificationHelper(private val context: Context) {
         screenStats: ScreenDrainStats
     ) {
         if (!hasNotificationPermission()) return
+        // Deduplicate: skip IPC call to system NotificationManager if nothing visible changed
+        val sig = "${snapshot.levelPercent}|${snapshot.currentMa / 10}|${snapshot.temperatureDeciC}|" +
+            "${snapshot.etaMinutes}|${screenStats.screenOnDrainPercent}|${screenStats.screenOffDrainPercent}|" +
+            "${settings.hashCode()}"
+        if (sig == lastNotificationSignature) return
+        lastNotificationSignature = sig
+
         runCatching {
             val notification = buildOngoingNotification(snapshot, settings, screenStats)
             notificationManager.notify(ONGOING_NOTIFICATION_ID, notification)
@@ -290,50 +317,31 @@ class NotificationHelper(private val context: Context) {
         }
     }
 
-    private fun getOrCreateTextIcon(mainText: String, unitLabel: String?): IconCompat {
-        val cacheKey = "$mainText|${unitLabel.orEmpty()}"
-        iconCache.get(cacheKey)?.let { return it }
-
-        val size = 64
-        val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bitmap)
+    /**
+     * Reuses a single 64x64 bitmap buffer in memory to draw the status bar icon with zero GC churn.
+     */
+    @Synchronized
+    private fun renderTextIconInPlace(mainText: String, unitLabel: String?): IconCompat {
+        iconCanvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
 
         if (unitLabel != null) {
-            val mainPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.WHITE
-                typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-                textAlign = Paint.Align.CENTER
-                textSize = when (mainText.length) {
-                    1, 2 -> 38f
-                    3 -> 30f
-                    else -> 24f
-                }
+            mainPaint.textSize = when (mainText.length) {
+                1, 2 -> 38f
+                3 -> 30f
+                else -> 24f
             }
-            val subPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.WHITE
-                typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-                textAlign = Paint.Align.CENTER
-                textSize = 16f
-            }
-            canvas.drawText(mainText, size / 2f, 36f, mainPaint)
-            canvas.drawText(unitLabel, size / 2f, 58f, subPaint)
+            iconCanvas.drawText(mainText, 32f, 36f, mainPaint)
+            iconCanvas.drawText(unitLabel, 32f, 58f, subPaint)
         } else {
-            val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.WHITE
-                typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-                textAlign = Paint.Align.CENTER
-                textSize = when (mainText.length) {
-                    1, 2 -> 44f
-                    else -> 32f
-                }
+            mainPaint.textSize = when (mainText.length) {
+                1, 2 -> 44f
+                else -> 32f
             }
-            val yPos = (size / 2f) - ((paint.descent() + paint.ascent()) / 2f)
-            canvas.drawText(mainText, size / 2f, yPos, paint)
+            val yPos = 32f - ((mainPaint.descent() + mainPaint.ascent()) / 2f)
+            iconCanvas.drawText(mainText, 32f, yPos, mainPaint)
         }
 
-        val icon = IconCompat.createWithBitmap(bitmap)
-        iconCache.put(cacheKey, icon)
-        return icon
+        return IconCompat.createWithBitmap(iconBitmap)
     }
 
     private fun formatTemp(deciC: Int, useFahrenheit: Boolean): String {

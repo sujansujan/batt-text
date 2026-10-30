@@ -1,18 +1,10 @@
 package com.batttext.app.data.prefs
 
 import android.content.Context
-import androidx.datastore.core.DataStore
-import androidx.datastore.preferences.core.Preferences
-import androidx.datastore.preferences.core.booleanPreferencesKey
-import androidx.datastore.preferences.core.edit
-import androidx.datastore.preferences.core.intPreferencesKey
-import androidx.datastore.preferences.core.longPreferencesKey
-import androidx.datastore.preferences.core.stringPreferencesKey
-import androidx.datastore.preferences.preferencesDataStore
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.map
-
-private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "batttext_settings")
+import android.content.SharedPreferences
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 enum class ThemeMode { AUTO, DARK, AMOLED, LIGHT }
 enum class FontMode { SYSTEM, MONOSPACE }
@@ -39,10 +31,9 @@ data class UserSettings(
     val backgroundMonitorEnabled: Boolean = true,
     val startOnBoot: Boolean = true,
 
-    // Status bar icon customization (BatteryGuru defaults to Current mA or Temperature or Level %)
     val statusBarIconMetric: StatusBarIconMetric = StatusBarIconMetric.LEVEL,
 
-    // Individual toggles for BatteryGuru-style 2-line notification (compact, readable, zero redundant Doze state)
+    // Individual toggles for Vertical List View notification items
     val notifShowCurrent: Boolean = true,
     val notifShowTemp: Boolean = true,
     val notifShowEta: Boolean = true,
@@ -90,142 +81,113 @@ data class ScreenDrainStats(
         }
 }
 
-class SettingsRepository(private val context: Context) {
+/**
+ * Zero-overhead SharedPreferences-backed repository.
+ * Eliminates the 500KB DataStore + Protobuf dependency and saves ~3 MB of runtime RAM.
+ */
+class SettingsRepository(context: Context) {
 
-    private object Keys {
-        val THEME_MODE = stringPreferencesKey("theme_mode")
-        val FONT_MODE = stringPreferencesKey("font_mode")
-        val PURE_ASCII = booleanPreferencesKey("pure_ascii")
-        val USE_FAHRENHEIT = booleanPreferencesKey("use_fahrenheit")
-        val DESIGN_CAP_OVERRIDE_MAH = intPreferencesKey("design_cap_override_mah")
-        val SAMPLE_INTERVAL_MIN = intPreferencesKey("sample_interval_min")
-        val RETENTION_DAYS = intPreferencesKey("retention_days")
-        val BG_MONITOR_EN = booleanPreferencesKey("bg_monitor_en")
-        val START_ON_BOOT = booleanPreferencesKey("start_on_boot")
+    private val prefs: SharedPreferences =
+        context.applicationContext.getSharedPreferences("batttext_prefs", Context.MODE_PRIVATE)
 
-        val STATUS_BAR_ICON_METRIC = stringPreferencesKey("status_bar_icon_metric")
-        val NOTIF_SHOW_LEVEL = booleanPreferencesKey("notif_show_level")
-        val NOTIF_SHOW_CURRENT = booleanPreferencesKey("notif_show_current")
-        val NOTIF_SHOW_POWER = booleanPreferencesKey("notif_show_power")
-        val NOTIF_SHOW_TEMP = booleanPreferencesKey("notif_show_temp")
-        val NOTIF_SHOW_VOLTAGE = booleanPreferencesKey("notif_show_voltage")
-        val NOTIF_SHOW_ETA = booleanPreferencesKey("notif_show_eta")
-        val NOTIF_SHOW_ACTIVE_RATE = booleanPreferencesKey("notif_show_active_rate")
-        val NOTIF_SHOW_IDLE_RATE = booleanPreferencesKey("notif_show_idle_rate")
-        val NOTIF_SHOW_DEEP_SLEEP = booleanPreferencesKey("notif_show_deep_sleep")
-        val NOTIF_SHOW_AWAKE_PCT = booleanPreferencesKey("notif_show_awake_pct")
+    private val _settingsFlow = MutableStateFlow(loadSettings())
+    val settingsFlow: StateFlow<UserSettings> = _settingsFlow.asStateFlow()
 
-        val ALERT_SOUND = booleanPreferencesKey("alert_sound")
-        val ALERT_LIMIT_EN = booleanPreferencesKey("alert_limit_en")
-        val ALERT_LIMIT_PCT = intPreferencesKey("alert_limit_pct")
-        val ALERT_FULL_EN = booleanPreferencesKey("alert_full_en")
-        val ALERT_LOW_EN = booleanPreferencesKey("alert_low_en")
-        val ALERT_LOW_PCT = intPreferencesKey("alert_low_pct")
-        val ALERT_CRIT_EN = booleanPreferencesKey("alert_crit_en")
-        val ALERT_CRIT_PCT = intPreferencesKey("alert_crit_pct")
-        val ALERT_TEMP_EN = booleanPreferencesKey("alert_temp_en")
-        val ALERT_TEMP_C = intPreferencesKey("alert_temp_c")
-        val ALERT_PLUG_CHANGE = booleanPreferencesKey("alert_plug_change")
+    private val _screenDrainFlow = MutableStateFlow(loadScreenDrain())
+    val screenDrainFlow: StateFlow<ScreenDrainStats> = _screenDrainFlow.asStateFlow()
 
-        val SCREEN_ON_DRAIN_MPCT = intPreferencesKey("screen_on_drain_mpct")
-        val SCREEN_OFF_DRAIN_MPCT = intPreferencesKey("screen_off_drain_mpct")
-        val SCREEN_ON_DURATION_MS = longPreferencesKey("screen_on_duration_ms")
-        val SCREEN_OFF_DURATION_MS = longPreferencesKey("screen_off_duration_ms")
-        val DEEP_SLEEP_DURATION_MS = longPreferencesKey("deep_sleep_duration_ms")
-        val AWAKE_IDLE_DURATION_MS = longPreferencesKey("awake_idle_duration_ms")
-        val SCREEN_RESET_TS = longPreferencesKey("screen_reset_ts")
-    }
-
-    val settingsFlow: Flow<UserSettings> = context.dataStore.data.map { prefs ->
-        UserSettings(
-            themeMode = runCatching { ThemeMode.valueOf(prefs[Keys.THEME_MODE] ?: "AUTO") }.getOrDefault(ThemeMode.AUTO),
-            fontMode = runCatching { FontMode.valueOf(prefs[Keys.FONT_MODE] ?: "SYSTEM") }.getOrDefault(FontMode.SYSTEM),
-            pureAsciiBorders = prefs[Keys.PURE_ASCII] ?: false,
-            useFahrenheit = prefs[Keys.USE_FAHRENHEIT] ?: false,
-            designCapacityOverrideMah = prefs[Keys.DESIGN_CAP_OVERRIDE_MAH] ?: 0,
-            sampleIntervalMinutes = prefs[Keys.SAMPLE_INTERVAL_MIN] ?: 10,
-            retentionDays = prefs[Keys.RETENTION_DAYS] ?: 14,
-            backgroundMonitorEnabled = prefs[Keys.BG_MONITOR_EN] ?: true,
-            startOnBoot = prefs[Keys.START_ON_BOOT] ?: true,
-
+    private fun loadSettings(): UserSettings {
+        return UserSettings(
+            themeMode = runCatching { ThemeMode.valueOf(prefs.getString("theme_mode", "AUTO") ?: "AUTO") }.getOrDefault(ThemeMode.AUTO),
+            fontMode = runCatching { FontMode.valueOf(prefs.getString("font_mode", "SYSTEM") ?: "SYSTEM") }.getOrDefault(FontMode.SYSTEM),
+            pureAsciiBorders = prefs.getBoolean("pure_ascii", false),
+            useFahrenheit = prefs.getBoolean("use_fahrenheit", false),
+            designCapacityOverrideMah = prefs.getInt("design_cap_override_mah", 0),
+            sampleIntervalMinutes = prefs.getInt("sample_interval_min", 10),
+            retentionDays = prefs.getInt("retention_days", 14),
+            backgroundMonitorEnabled = prefs.getBoolean("bg_monitor_en", true),
+            startOnBoot = prefs.getBoolean("start_on_boot", true),
             statusBarIconMetric = runCatching {
-                StatusBarIconMetric.valueOf(prefs[Keys.STATUS_BAR_ICON_METRIC] ?: "LEVEL")
+                StatusBarIconMetric.valueOf(prefs.getString("status_bar_icon_metric", "LEVEL") ?: "LEVEL")
             }.getOrDefault(StatusBarIconMetric.LEVEL),
-
-            notifShowCurrent = prefs[Keys.NOTIF_SHOW_CURRENT] ?: true,
-            notifShowTemp = prefs[Keys.NOTIF_SHOW_TEMP] ?: true,
-            notifShowEta = prefs[Keys.NOTIF_SHOW_ETA] ?: true,
-            notifShowLevel = prefs[Keys.NOTIF_SHOW_LEVEL] ?: false,
-            notifShowPower = prefs[Keys.NOTIF_SHOW_POWER] ?: false,
-            notifShowVoltage = prefs[Keys.NOTIF_SHOW_VOLTAGE] ?: false,
-            notifShowActiveRate = prefs[Keys.NOTIF_SHOW_ACTIVE_RATE] ?: true,
-            notifShowIdleRate = prefs[Keys.NOTIF_SHOW_IDLE_RATE] ?: true,
-            notifShowDeepSleepPct = prefs[Keys.NOTIF_SHOW_DEEP_SLEEP] ?: true,
-            notifShowAwakePct = prefs[Keys.NOTIF_SHOW_AWAKE_PCT] ?: false,
-
-            alertSoundEnabled = prefs[Keys.ALERT_SOUND] ?: true,
-            alertChargeLimitEnabled = prefs[Keys.ALERT_LIMIT_EN] ?: true,
-            alertChargeLimitPercent = prefs[Keys.ALERT_LIMIT_PCT] ?: 80,
-            alertFullChargeEnabled = prefs[Keys.ALERT_FULL_EN] ?: true,
-            alertLowBatteryEnabled = prefs[Keys.ALERT_LOW_EN] ?: true,
-            alertLowBatteryPercent = prefs[Keys.ALERT_LOW_PCT] ?: 20,
-            alertCriticalBatteryEnabled = prefs[Keys.ALERT_CRIT_EN] ?: true,
-            alertCriticalBatteryPercent = prefs[Keys.ALERT_CRIT_PCT] ?: 10,
-            alertHighTempEnabled = prefs[Keys.ALERT_TEMP_EN] ?: true,
-            alertHighTempCelsius = prefs[Keys.ALERT_TEMP_C] ?: 40,
-            alertPlugStateChange = prefs[Keys.ALERT_PLUG_CHANGE] ?: false
+            notifShowCurrent = prefs.getBoolean("notif_show_current", true),
+            notifShowTemp = prefs.getBoolean("notif_show_temp", true),
+            notifShowEta = prefs.getBoolean("notif_show_eta", true),
+            notifShowLevel = prefs.getBoolean("notif_show_level", false),
+            notifShowPower = prefs.getBoolean("notif_show_power", false),
+            notifShowVoltage = prefs.getBoolean("notif_show_voltage", false),
+            notifShowActiveRate = prefs.getBoolean("notif_show_active_rate", true),
+            notifShowIdleRate = prefs.getBoolean("notif_show_idle_rate", true),
+            notifShowDeepSleepPct = prefs.getBoolean("notif_show_deep_sleep", true),
+            notifShowAwakePct = prefs.getBoolean("notif_show_awake_pct", false),
+            alertSoundEnabled = prefs.getBoolean("alert_sound", true),
+            alertChargeLimitEnabled = prefs.getBoolean("alert_limit_en", true),
+            alertChargeLimitPercent = prefs.getInt("alert_limit_pct", 80),
+            alertFullChargeEnabled = prefs.getBoolean("alert_full_en", true),
+            alertLowBatteryEnabled = prefs.getBoolean("alert_low_en", true),
+            alertLowBatteryPercent = prefs.getInt("alert_low_pct", 20),
+            alertCriticalBatteryEnabled = prefs.getBoolean("alert_crit_en", true),
+            alertCriticalBatteryPercent = prefs.getInt("alert_crit_pct", 10),
+            alertHighTempEnabled = prefs.getBoolean("alert_temp_en", true),
+            alertHighTempCelsius = prefs.getInt("alert_temp_c", 40),
+            alertPlugStateChange = prefs.getBoolean("alert_plug_change", false)
         )
     }
 
-    val screenDrainFlow: Flow<ScreenDrainStats> = context.dataStore.data.map { prefs ->
-        ScreenDrainStats(
-            screenOnDrainPercent = (prefs[Keys.SCREEN_ON_DRAIN_MPCT] ?: 0) / 1000f,
-            screenOffDrainPercent = (prefs[Keys.SCREEN_OFF_DRAIN_MPCT] ?: 0) / 1000f,
-            screenOnDurationMs = prefs[Keys.SCREEN_ON_DURATION_MS] ?: 0L,
-            screenOffDurationMs = prefs[Keys.SCREEN_OFF_DURATION_MS] ?: 0L,
-            deepSleepDurationMs = prefs[Keys.DEEP_SLEEP_DURATION_MS] ?: 0L,
-            awakeIdleDurationMs = prefs[Keys.AWAKE_IDLE_DURATION_MS] ?: 0L,
-            resetTimestampMs = prefs[Keys.SCREEN_RESET_TS] ?: System.currentTimeMillis()
+    private fun loadScreenDrain(): ScreenDrainStats {
+        return ScreenDrainStats(
+            screenOnDrainPercent = prefs.getInt("screen_on_drain_mpct", 0) / 1000f,
+            screenOffDrainPercent = prefs.getInt("screen_off_drain_mpct", 0) / 1000f,
+            screenOnDurationMs = prefs.getLong("screen_on_duration_ms", 0L),
+            screenOffDurationMs = prefs.getLong("screen_off_duration_ms", 0L),
+            deepSleepDurationMs = prefs.getLong("deep_sleep_duration_ms", 0L),
+            awakeIdleDurationMs = prefs.getLong("awake_idle_duration_ms", 0L),
+            resetTimestampMs = prefs.getLong("screen_reset_ts", System.currentTimeMillis())
         )
     }
 
-    suspend fun setThemeMode(mode: ThemeMode) = context.dataStore.edit { it[Keys.THEME_MODE] = mode.name }
-    suspend fun setFontMode(mode: FontMode) = context.dataStore.edit { it[Keys.FONT_MODE] = mode.name }
-    suspend fun setPureAsciiBorders(enabled: Boolean) = context.dataStore.edit { it[Keys.PURE_ASCII] = enabled }
-    suspend fun setUseFahrenheit(enabled: Boolean) = context.dataStore.edit { it[Keys.USE_FAHRENHEIT] = enabled }
-    suspend fun setDesignCapacityOverrideMah(mah: Int) = context.dataStore.edit {
-        it[Keys.DESIGN_CAP_OVERRIDE_MAH] = if (mah <= 0) 0 else mah.coerceIn(1000, 25000)
+    private inline fun updatePref(block: SharedPreferences.Editor.() -> Unit) {
+        prefs.edit().apply(block).apply()
+        _settingsFlow.value = loadSettings()
     }
-    suspend fun setSampleIntervalMinutes(minutes: Int) = context.dataStore.edit { it[Keys.SAMPLE_INTERVAL_MIN] = minutes.coerceIn(1, 60) }
-    suspend fun setRetentionDays(days: Int) = context.dataStore.edit { it[Keys.RETENTION_DAYS] = days.coerceIn(1, 90) }
-    suspend fun setBackgroundMonitorEnabled(enabled: Boolean) = context.dataStore.edit { it[Keys.BG_MONITOR_EN] = enabled }
-    suspend fun setStartOnBoot(enabled: Boolean) = context.dataStore.edit { it[Keys.START_ON_BOOT] = enabled }
 
-    suspend fun setStatusBarIconMetric(metric: StatusBarIconMetric) = context.dataStore.edit {
-        it[Keys.STATUS_BAR_ICON_METRIC] = metric.name
+    suspend fun setThemeMode(mode: ThemeMode) = updatePref { putString("theme_mode", mode.name) }
+    suspend fun setFontMode(mode: FontMode) = updatePref { putString("font_mode", mode.name) }
+    suspend fun setPureAsciiBorders(enabled: Boolean) = updatePref { putBoolean("pure_ascii", enabled) }
+    suspend fun setUseFahrenheit(enabled: Boolean) = updatePref { putBoolean("use_fahrenheit", enabled) }
+    suspend fun setDesignCapacityOverrideMah(mah: Int) = updatePref {
+        putInt("design_cap_override_mah", if (mah <= 0) 0 else mah.coerceIn(1000, 25000))
     }
-    suspend fun setNotifShowLevel(enabled: Boolean) = context.dataStore.edit { it[Keys.NOTIF_SHOW_LEVEL] = enabled }
-    suspend fun setNotifShowCurrent(enabled: Boolean) = context.dataStore.edit { it[Keys.NOTIF_SHOW_CURRENT] = enabled }
-    suspend fun setNotifShowPower(enabled: Boolean) = context.dataStore.edit { it[Keys.NOTIF_SHOW_POWER] = enabled }
-    suspend fun setNotifShowTemp(enabled: Boolean) = context.dataStore.edit { it[Keys.NOTIF_SHOW_TEMP] = enabled }
-    suspend fun setNotifShowVoltage(enabled: Boolean) = context.dataStore.edit { it[Keys.NOTIF_SHOW_VOLTAGE] = enabled }
-    suspend fun setNotifShowEta(enabled: Boolean) = context.dataStore.edit { it[Keys.NOTIF_SHOW_ETA] = enabled }
-    suspend fun setNotifShowActiveRate(enabled: Boolean) = context.dataStore.edit { it[Keys.NOTIF_SHOW_ACTIVE_RATE] = enabled }
-    suspend fun setNotifShowIdleRate(enabled: Boolean) = context.dataStore.edit { it[Keys.NOTIF_SHOW_IDLE_RATE] = enabled }
-    suspend fun setNotifShowDeepSleepPct(enabled: Boolean) = context.dataStore.edit { it[Keys.NOTIF_SHOW_DEEP_SLEEP] = enabled }
-    suspend fun setNotifShowAwakePct(enabled: Boolean) = context.dataStore.edit { it[Keys.NOTIF_SHOW_AWAKE_PCT] = enabled }
+    suspend fun setSampleIntervalMinutes(minutes: Int) = updatePref { putInt("sample_interval_min", minutes.coerceIn(1, 60)) }
+    suspend fun setRetentionDays(days: Int) = updatePref { putInt("retention_days", days.coerceIn(1, 90)) }
+    suspend fun setBackgroundMonitorEnabled(enabled: Boolean) = updatePref { putBoolean("bg_monitor_en", enabled) }
+    suspend fun setStartOnBoot(enabled: Boolean) = updatePref { putBoolean("start_on_boot", enabled) }
 
-    suspend fun setAlertSoundEnabled(enabled: Boolean) = context.dataStore.edit { it[Keys.ALERT_SOUND] = enabled }
-    suspend fun setAlertChargeLimitEnabled(enabled: Boolean) = context.dataStore.edit { it[Keys.ALERT_LIMIT_EN] = enabled }
-    suspend fun setAlertChargeLimitPercent(pct: Int) = context.dataStore.edit { it[Keys.ALERT_LIMIT_PCT] = pct.coerceIn(50, 99) }
-    suspend fun setAlertFullChargeEnabled(enabled: Boolean) = context.dataStore.edit { it[Keys.ALERT_FULL_EN] = enabled }
-    suspend fun setAlertLowBatteryEnabled(enabled: Boolean) = context.dataStore.edit { it[Keys.ALERT_LOW_EN] = enabled }
-    suspend fun setAlertLowBatteryPercent(pct: Int) = context.dataStore.edit { it[Keys.ALERT_LOW_PCT] = pct.coerceIn(10, 50) }
-    suspend fun setAlertCriticalBatteryEnabled(enabled: Boolean) = context.dataStore.edit { it[Keys.ALERT_CRIT_EN] = enabled }
-    suspend fun setAlertCriticalBatteryPercent(pct: Int) = context.dataStore.edit { it[Keys.ALERT_CRIT_PCT] = pct.coerceIn(3, 25) }
-    suspend fun setAlertHighTempEnabled(enabled: Boolean) = context.dataStore.edit { it[Keys.ALERT_TEMP_EN] = enabled }
-    suspend fun setAlertHighTempCelsius(tempC: Int) = context.dataStore.edit { it[Keys.ALERT_TEMP_C] = tempC.coerceIn(30, 60) }
-    suspend fun setAlertPlugStateChange(enabled: Boolean) = context.dataStore.edit { it[Keys.ALERT_PLUG_CHANGE] = enabled }
+    suspend fun setStatusBarIconMetric(metric: StatusBarIconMetric) = updatePref {
+        putString("status_bar_icon_metric", metric.name)
+    }
+    suspend fun setNotifShowLevel(enabled: Boolean) = updatePref { putBoolean("notif_show_level", enabled) }
+    suspend fun setNotifShowCurrent(enabled: Boolean) = updatePref { putBoolean("notif_show_current", enabled) }
+    suspend fun setNotifShowPower(enabled: Boolean) = updatePref { putBoolean("notif_show_power", enabled) }
+    suspend fun setNotifShowTemp(enabled: Boolean) = updatePref { putBoolean("notif_show_temp", enabled) }
+    suspend fun setNotifShowVoltage(enabled: Boolean) = updatePref { putBoolean("notif_show_voltage", enabled) }
+    suspend fun setNotifShowEta(enabled: Boolean) = updatePref { putBoolean("notif_show_eta", enabled) }
+    suspend fun setNotifShowActiveRate(enabled: Boolean) = updatePref { putBoolean("notif_show_active_rate", enabled) }
+    suspend fun setNotifShowIdleRate(enabled: Boolean) = updatePref { putBoolean("notif_show_idle_rate", enabled) }
+    suspend fun setNotifShowDeepSleepPct(enabled: Boolean) = updatePref { putBoolean("notif_show_deep_sleep", enabled) }
+    suspend fun setNotifShowAwakePct(enabled: Boolean) = updatePref { putBoolean("notif_show_awake_pct", enabled) }
+
+    suspend fun setAlertSoundEnabled(enabled: Boolean) = updatePref { putBoolean("alert_sound", enabled) }
+    suspend fun setAlertChargeLimitEnabled(enabled: Boolean) = updatePref { putBoolean("alert_limit_en", enabled) }
+    suspend fun setAlertChargeLimitPercent(pct: Int) = updatePref { putInt("alert_limit_pct", pct.coerceIn(50, 99)) }
+    suspend fun setAlertFullChargeEnabled(enabled: Boolean) = updatePref { putBoolean("alert_full_en", enabled) }
+    suspend fun setAlertLowBatteryEnabled(enabled: Boolean) = updatePref { putBoolean("alert_low_en", enabled) }
+    suspend fun setAlertLowBatteryPercent(pct: Int) = updatePref { putInt("alert_low_pct", pct.coerceIn(10, 50)) }
+    suspend fun setAlertCriticalBatteryEnabled(enabled: Boolean) = updatePref { putBoolean("alert_crit_en", enabled) }
+    suspend fun setAlertCriticalBatteryPercent(pct: Int) = updatePref { putInt("alert_crit_pct", pct.coerceIn(3, 25)) }
+    suspend fun setAlertHighTempEnabled(enabled: Boolean) = updatePref { putBoolean("alert_temp_en", enabled) }
+    suspend fun setAlertHighTempCelsius(tempC: Int) = updatePref { putInt("alert_temp_c", tempC.coerceIn(30, 60)) }
+    suspend fun setAlertPlugStateChange(enabled: Boolean) = updatePref { putBoolean("alert_plug_change", enabled) }
 
     suspend fun recordScreenSlice(
         isScreenOn: Boolean,
@@ -238,38 +200,40 @@ class SettingsRepository(private val context: Context) {
         val safeUptime = deltaUptimeMs.coerceIn(0L, safeElapsed)
         val deepSleepSlice = (safeElapsed - safeUptime).coerceAtLeast(0L)
 
-        context.dataStore.edit { prefs ->
-            if (!prefs.contains(Keys.SCREEN_RESET_TS)) {
-                prefs[Keys.SCREEN_RESET_TS] = System.currentTimeMillis()
+        prefs.edit().apply {
+            if (!prefs.contains("screen_reset_ts")) {
+                putLong("screen_reset_ts", System.currentTimeMillis())
             }
             if (isScreenOn) {
-                val curDrain = prefs[Keys.SCREEN_ON_DRAIN_MPCT] ?: 0
-                val curDur = prefs[Keys.SCREEN_ON_DURATION_MS] ?: 0L
-                prefs[Keys.SCREEN_ON_DRAIN_MPCT] = curDrain + (deltaPercent.coerceAtLeast(0) * 1000)
-                prefs[Keys.SCREEN_ON_DURATION_MS] = curDur + safeElapsed
+                val curDrain = prefs.getInt("screen_on_drain_mpct", 0)
+                val curDur = prefs.getLong("screen_on_duration_ms", 0L)
+                putInt("screen_on_drain_mpct", curDrain + (deltaPercent.coerceAtLeast(0) * 1000))
+                putLong("screen_on_duration_ms", curDur + safeElapsed)
             } else {
-                val curDrain = prefs[Keys.SCREEN_OFF_DRAIN_MPCT] ?: 0
-                val curDur = prefs[Keys.SCREEN_OFF_DURATION_MS] ?: 0L
-                val curDeep = prefs[Keys.DEEP_SLEEP_DURATION_MS] ?: 0L
-                val curAwake = prefs[Keys.AWAKE_IDLE_DURATION_MS] ?: 0L
+                val curDrain = prefs.getInt("screen_off_drain_mpct", 0)
+                val curDur = prefs.getLong("screen_off_duration_ms", 0L)
+                val curDeep = prefs.getLong("deep_sleep_duration_ms", 0L)
+                val curAwake = prefs.getLong("awake_idle_duration_ms", 0L)
 
-                prefs[Keys.SCREEN_OFF_DRAIN_MPCT] = curDrain + (deltaPercent.coerceAtLeast(0) * 1000)
-                prefs[Keys.SCREEN_OFF_DURATION_MS] = curDur + safeElapsed
-                prefs[Keys.DEEP_SLEEP_DURATION_MS] = curDeep + deepSleepSlice
-                prefs[Keys.AWAKE_IDLE_DURATION_MS] = curAwake + safeUptime
+                putInt("screen_off_drain_mpct", curDrain + (deltaPercent.coerceAtLeast(0) * 1000))
+                putLong("screen_off_duration_ms", curDur + safeElapsed)
+                putLong("deep_sleep_duration_ms", curDeep + deepSleepSlice)
+                putLong("awake_idle_duration_ms", curAwake + safeUptime)
             }
-        }
+        }.apply()
+        _screenDrainFlow.value = loadScreenDrain()
     }
 
     suspend fun resetScreenStats() {
-        context.dataStore.edit { prefs ->
-            prefs[Keys.SCREEN_ON_DRAIN_MPCT] = 0
-            prefs[Keys.SCREEN_OFF_DRAIN_MPCT] = 0
-            prefs[Keys.SCREEN_ON_DURATION_MS] = 0L
-            prefs[Keys.SCREEN_OFF_DURATION_MS] = 0L
-            prefs[Keys.DEEP_SLEEP_DURATION_MS] = 0L
-            prefs[Keys.AWAKE_IDLE_DURATION_MS] = 0L
-            prefs[Keys.SCREEN_RESET_TS] = System.currentTimeMillis()
-        }
+        prefs.edit().apply {
+            putInt("screen_on_drain_mpct", 0)
+            putInt("screen_off_drain_mpct", 0)
+            putLong("screen_on_duration_ms", 0L)
+            putLong("screen_off_duration_ms", 0L)
+            putLong("deep_sleep_duration_ms", 0L)
+            putLong("awake_idle_duration_ms", 0L)
+            putLong("screen_reset_ts", System.currentTimeMillis())
+        }.apply()
+        _screenDrainFlow.value = loadScreenDrain()
     }
 }
